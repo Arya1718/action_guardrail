@@ -45,13 +45,4 @@ RUN python -m uvicorn --version
 EXPOSE 7860
 
 # Start FastAPI
-CMD [
-    "python",
-    "-m",
-    "uvicorn",
-    "app.main:app",
-    "--host",
-    "0.0.0.0",
-    "--port",
-    "7860"
-]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
