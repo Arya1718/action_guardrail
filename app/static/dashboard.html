@@ -120,6 +120,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* empty state */
 .empty-state { text-align: center; padding: 32px 16px; color: var(--text-dim); }
 
+/* api key banner */
+.key-banner { display:none; background:rgba(59,130,246,0.12); color:var(--blue); padding:10px 16px; border-radius:8px; margin-bottom:16px; font-size:0.85rem; text-align:center; }
+.key-banner.visible { display:block; }
+
 /* rule grid */
 .rule-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 .rule-card {
@@ -180,6 +184,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <div id="secretsBanner" style="display:none;background:rgba(239,68,68,0.15);color:var(--red);padding:10px 16px;border-radius:8px;margin-bottom:16px;font-size:0.85rem">
   Warning: API_KEY or MONGO_URI may not be configured. Some features may be unavailable.
 </div>
+
+<div id="noKeyBanner" class="key-banner">Enter your API key above to load data</div>
 
 <div class="header">
   <h1>Action Guardrail <span id="statusPill" class="status-pill"><span class="status-dot"></span> <span id="statusText">Loading...</span></span></h1>
@@ -281,8 +287,24 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <script>
 // ── API key ────────────────────────────────────────────────────────────
 let API_KEY = '';
+let _keyEverWorked = false;
+
+function showApiKeyBanner() {
+  document.getElementById('noKeyBanner').classList.add('visible');
+}
+function hideApiKeyBanner() {
+  _keyEverWorked = true;
+  document.getElementById('noKeyBanner').classList.remove('visible');
+}
+function needsKey() {
+  if (_keyEverWorked) return false;
+  if (!API_KEY) { showApiKeyBanner(); return true; }
+  return false;
+}
+
 document.getElementById('apiKeyInput').addEventListener('input', function() {
   API_KEY = this.value.trim();
+  if (API_KEY) hideApiKeyBanner();
 });
 
 function getHeaders() {
@@ -304,10 +326,12 @@ function toast(msg, type) {
 async function loadHealth() {
   const pill = document.getElementById('statusPill');
   const text = document.getElementById('statusText');
+  if (needsKey()) { pill.className = 'status-pill unhealthy'; text.textContent = 'No API key'; return; }
   try {
     const r = await fetch('/health', { headers: getHeaders() });
     if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
+    hideApiKeyBanner();
     pill.className = 'status-pill healthy';
     let label = 'Healthy';
     if (d.database) label += ' | DB: ' + d.database;
@@ -329,11 +353,13 @@ async function loadHealth() {
 // ── HITL ───────────────────────────────────────────────────────────────
 async function loadHitl() {
   const wrap = document.getElementById('hitlTableWrap');
+  if (needsKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view pending reviews</div>'; return; }
   wrap.innerHTML = '<div class="empty-state"><span class="spinner"></span>Loading pending reviews...</div>';
   try {
     const r = await fetch('/hitl/pending', { headers: getHeaders() });
     if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
+    hideApiKeyBanner();
     const list = d.pending || [];
     document.getElementById('hitlCount').textContent = list.length + ' pending';
     if (list.length === 0) {
@@ -384,6 +410,7 @@ async function resolveHitl(id, resolution) {
 // ── Audit Log ──────────────────────────────────────────────────────────
 async function loadAuditLog() {
   const wrap = document.getElementById('auditTableWrap');
+  if (needsKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view audit log</div>'; return; }
   const tool = document.getElementById('filterTool').value;
   const outcome = document.getElementById('filterOutcome').value;
   let url = '/audit-log?limit=20';
@@ -395,6 +422,7 @@ async function loadAuditLog() {
     const r = await fetch(url, { headers: getHeaders() });
     if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
+    hideApiKeyBanner();
     const list = d.records || [];
     if (list.length === 0) {
       wrap.innerHTML = '<div class="empty-state">No audit records found</div>';
@@ -424,10 +452,12 @@ async function loadAuditLog() {
 // ── Policies ───────────────────────────────────────────────────────────
 async function loadPolicies() {
   const wrap = document.getElementById('policiesWrap');
+  if (needsKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view policies</div>'; return; }
   try {
     const r = await fetch('/policies', { headers: getHeaders() });
     if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
+    hideApiKeyBanner();
     const list = d.policies || [];
     if (list.length === 0) {
       wrap.innerHTML = '<div class="empty-state">No policies loaded</div>';
@@ -458,6 +488,7 @@ async function loadPolicies() {
 
 // ── Populate tool filter ───────────────────────────────────────────────
 async function populateToolFilter() {
+  if (needsKey()) return;
   try {
     const r = await fetch('/audit-log?limit=50', { headers: getHeaders() });
     if (!r.ok) return;
