@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+.gitignore
+tests/
+harness/.env
+harness/__pycache__/
+deploy/
+template.yaml
+deploy.ps1
+*.md
+.DS_Store
+.aws-sam/

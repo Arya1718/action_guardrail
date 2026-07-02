@@ -1,0 +1,33 @@
+rules:
+  - id: "block-bulk-delete"
+    description: "Block any database delete exceeding 100 records"
+    priority: 10
+    action: block
+    match:
+      tool: "delete_records"
+      conditions:
+        - field: "record_count"
+          operator: "gt"
+          value: 100
+
+  - id: "hitl-external-email"
+    description: "Require human review for emails to external domains"
+    priority: 10
+    action: require_hitl
+    match:
+      tool: "send_email"
+      conditions:
+        - field: "recipient_domain"
+          operator: "not_in"
+          value: ["mycompany.com"]
+
+  - id: "log-confidential-read"
+    description: "Log and allow reads of paths containing 'confidential'"
+    priority: 10
+    action: log_and_allow
+    match:
+      tool: "read_file"
+      conditions:
+        - field: "path"
+          operator: "contains"
+          value: "confidential"
