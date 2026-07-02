@@ -1,9 +1,13 @@
 import logging
+import os as _os
 import time
+import uuid
+from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -37,24 +41,114 @@ def _make_storage() -> StorageBackend:
     return InMemoryStorage()
 
 
-# Rules are loaded once and reused. Storage is re-created fresh when the
-# lifespan runs (TestClient, uvicorn), but the module-level fallback
-# ensures Mangum (lifespan="off") still works on Lambda.
 logger.info("Loading policies from %s", settings.POLICY_FILE_PATH)
 _rules = load_policies(settings.POLICY_FILE_PATH)
 logger.info("Loaded %d rules", len(_rules))
 
 
+# ── Rate limiter (in-memory sliding window) ─────────────────────────────
+
+_RATE_LIMIT_WINDOW = 60
+_RATE_LIMIT_MAX = 60
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(key: str) -> Optional[int]:
+    now = time.time()
+    window_start = now - _RATE_LIMIT_WINDOW
+    bucket = _rate_limit_store[key]
+    _rate_limit_store[key] = [t for t in bucket if t > window_start]
+    bucket = _rate_limit_store[key]
+    if len(bucket) >= _RATE_LIMIT_MAX:
+        return int(_RATE_LIMIT_WINDOW - (now - bucket[0]))
+    bucket.append(now)
+    return None
+
+
+# ── Lifespan ────────────────────────────────────────────────────────────
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan_fn(app: FastAPI):
     app.state.rules = _rules
     app.state.storage = _make_storage()
     yield
 
 
-app = FastAPI(title="Action Guardrail", version="2.0.0", lifespan=lifespan)
+# ── App instance ────────────────────────────────────────────────────────
+
+app = FastAPI(title="Action Guardrail", version="2.0.0", lifespan=lifespan_fn)
 app.state.rules = _rules
 app.state.storage = _make_storage()
+
+
+# ── Production middleware ───────────────────────────────────────────────
+
+
+@app.middleware("http")
+async def _production_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    correlation_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request.state.request_id = correlation_id
+
+    path = request.url.path
+    protected = (
+        path.startswith("/evaluate")
+        or path.startswith("/hitl")
+        or path.startswith("/audit-log")
+        or path == "/policies"
+    )
+
+    if protected:
+        api_key = request.headers.get("X-API-Key", "")
+        if not api_key or api_key != settings.API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "Unauthorized",
+                    "detail": "Missing or invalid X-API-Key header",
+                },
+                headers={
+                    "X-Request-ID": correlation_id,
+                    "WWW-Authenticate": 'ApiKey realm="guardrail"',
+                },
+            )
+
+        if path.startswith("/evaluate"):
+            retry_after = _check_rate_limit(api_key)
+            if retry_after is not None:
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "error": "Too Many Requests",
+                        "detail": f"Rate limit exceeded. Try again in {retry_after}s.",
+                    },
+                    headers={
+                        "X-Request-ID": correlation_id,
+                        "Retry-After": str(retry_after),
+                    },
+                )
+
+    if path.startswith("/evaluate"):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 100_000:
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "error": "Payload Too Large",
+                    "detail": "Request body exceeds 100KB limit",
+                },
+                headers={"X-Request-ID": correlation_id},
+            )
+
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+
+    response.headers["X-Request-ID"] = correlation_id
+    response.headers["X-Process-Time-Ms"] = str(elapsed_ms)
+    return response
 
 
 # ── Request/Response models ──────────────────────────────────────────────
@@ -72,6 +166,8 @@ class EvaluateResponse(BaseModel):
     dry_run: bool = False
     hitl_request_id: Optional[str] = None
     message: str = ""
+    request_id: str = ""
+    audit_written: bool = True
 
 
 class ErrorDetail(BaseModel):
@@ -103,12 +199,17 @@ class HealthResponse(BaseModel):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled exception on %s %s", request.method, request.url)
+    rid = getattr(request.state, "request_id", "unknown")
+    logger.exception(
+        "Unhandled exception request_id=%s on %s %s",
+        rid, request.method, request.url,
+    )
     msg = str(exc) if str(exc) else "Internal server error"
     status = 503 if "MongoDB" in msg or "storage unavailable" in msg else 500
     return JSONResponse(
         status_code=status,
         content={"error": "Internal server error", "detail": msg},
+        headers={"X-Request-ID": rid},
     )
 
 
@@ -119,12 +220,23 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def evaluate(req: EvaluateRequest, request: Request):
     rules: list[Rule] = request.app.state.rules
     storage: StorageBackend = request.app.state.storage
+    rid = getattr(request.state, "request_id", "")
 
     start = time.perf_counter()
     decision = evaluate_action(req.tool_call, rules)
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 
-    audit_record = write_audit_log(storage, req.tool_call, decision, dry_run=req.dry_run)
+    audit_written = True
+    try:
+        audit_record = write_audit_log(storage, req.tool_call, decision, dry_run=req.dry_run)
+        audit_id = audit_record.id
+    except Exception as exc:
+        logger.warning(
+            "AUDIT_WRITE_FAILED request_id=%s tool=%s error=%s",
+            rid, req.tool_call.tool, exc,
+        )
+        audit_written = False
+        audit_id = "failed"
 
     hitl_request_id: Optional[str] = None
     message = ""
@@ -150,8 +262,27 @@ async def evaluate(req: EvaluateRequest, request: Request):
                 f"'{req.tool_call.tool}'. No pending request created."
             )
         else:
-            hitl_req = create_hitl_request(storage, req.tool_call, decision)
-            hitl_request_id = hitl_req.id
+            try:
+                hitl_req = create_hitl_request(storage, req.tool_call, decision)
+                hitl_request_id = hitl_req.id
+            except Exception as exc:
+                logger.warning(
+                    "HITL_CREATE_FAILED request_id=%s tool=%s error=%s",
+                    rid, req.tool_call.tool, exc,
+                )
+                message = (
+                    f"HITL required for call to '{req.tool_call.tool}' "
+                    f"but storage write failed: {exc}. Action not executed."
+                )
+                return EvaluateResponse(
+                    outcome=outcome,
+                    matched_rule_id=decision.matched_rule_id,
+                    reason=decision.reason,
+                    dry_run=req.dry_run,
+                    request_id=rid,
+                    audit_written=audit_written,
+                    message=message,
+                )
             message = (
                 f"HITL required for call to '{req.tool_call.tool}'. "
                 f"Pending request id={hitl_request_id}. "
@@ -168,13 +299,10 @@ async def evaluate(req: EvaluateRequest, request: Request):
         message = f"Call to '{req.tool_call.tool}' allowed (no matching rule)."
 
     logger.info(
-        "EVALUATE tool=%s outcome=%s latency_ms=%s dry_run=%s rule=%s audit_id=%s",
-        req.tool_call.tool,
-        outcome,
-        latency_ms,
-        req.dry_run,
-        decision.matched_rule_id,
-        audit_record.id,
+        "EVALUATE request_id=%s tool=%s outcome=%s latency_ms=%s "
+        "dry_run=%s rule=%s audit_id=%s audit_written=%s",
+        rid, req.tool_call.tool, outcome, latency_ms,
+        req.dry_run, decision.matched_rule_id, audit_id, audit_written,
     )
 
     return EvaluateResponse(
@@ -184,6 +312,8 @@ async def evaluate(req: EvaluateRequest, request: Request):
         dry_run=req.dry_run,
         hitl_request_id=hitl_request_id,
         message=message,
+        request_id=rid,
+        audit_written=audit_written,
     )
 
 
@@ -292,7 +422,8 @@ async def list_policies(request: Request):
     }
 
 
-import os as _os
+# ── Static files + Dashboard ────────────────────────────────────────────
+
 _static_dir = _os.path.join(_os.path.dirname(__file__), "static")
 if _os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")

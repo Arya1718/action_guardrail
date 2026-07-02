@@ -130,6 +130,38 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .rule-card .rule-action { margin-top: 4px; }
 .rule-card .rule-desc { margin-top: 4px; font-size: 0.85rem; color: var(--text-dim); }
 
+/* form elements */
+.form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+.form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 160px; }
+.form-group label { font-size: 0.8rem; color: var(--text-dim); }
+.form-group input, .form-group select, .form-group textarea {
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface2); color: var(--text); font-size: 0.85rem;
+  font-family: inherit;
+}
+.form-group textarea { resize: vertical; min-height: 50px; font-family: "SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace; font-size: 0.8rem; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--blue); }
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.checkbox-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--blue); }
+
+/* preset buttons */
+.presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.btn-preset { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-preset:hover { border-color: var(--blue); }
+.btn-evaluate { background: var(--blue); color: #fff; padding: 10px 24px; font-size: 0.9rem; }
+
+/* result display */
+.result-box {
+  margin-top: 16px; padding: 16px; border-radius: 8px;
+  border: 1px solid var(--border); display: none;
+}
+.result-box.visible { display: block; }
+.result-outcome { font-size: 1.3rem; font-weight: 600; margin-bottom: 8px; }
+.result-detail { font-size: 0.85rem; color: var(--text-dim); line-height: 1.7; }
+.result-detail strong { color: var(--text); }
+.result-hint { margin-top: 8px; font-size: 0.8rem; color: var(--yellow); }
+.error-inline { color: var(--red); font-size: 0.85rem; margin-top: 4px; display: none; }
+
 /* spinner */
 .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear; margin-right: 8px; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -145,9 +177,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <body>
 <div class="container">
 
+<div id="secretsBanner" style="display:none;background:rgba(239,68,68,0.15);color:var(--red);padding:10px 16px;border-radius:8px;margin-bottom:16px;font-size:0.85rem">
+  Warning: API_KEY or MONGO_URI may not be configured. Some features may be unavailable.
+</div>
+
 <div class="header">
   <h1>Action Guardrail <span id="statusPill" class="status-pill"><span class="status-dot"></span> <span id="statusText">Loading...</span></span></h1>
   <div style="display:flex;gap:8px;align-items:center">
+    <span style="font-size:0.75rem;color:var(--text-dim)">Rate limit: 60 req/min</span>
     <a href="/docs" style="color:var(--blue);font-size:0.85rem;text-decoration:none">API Docs</a>
   </div>
 </div>
@@ -157,8 +194,47 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <input type="password" id="apiKeyInput" placeholder="Paste API key (if required)" autocomplete="off">
 </div>
 
-<!-- HITL -->
+<!-- Try It -->
 <div class="card">
+  <div class="card-header">
+    <h2>Try It</h2>
+    <div class="presets">
+      <button class="btn-preset btn-small" onclick="fillPreset('bulk-delete')">Try: Bulk Delete</button>
+      <button class="btn-preset btn-small" onclick="fillPreset('external-email')">Try: External Email</button>
+      <button class="btn-preset btn-small" onclick="fillPreset('confidential-read')">Try: Confidential Read</button>
+    </div>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label for="tryTool">Tool</label>
+      <select id="tryTool" onchange="updateParamFields()">
+        <option value="delete_records">delete_records</option>
+        <option value="send_email">send_email</option>
+        <option value="read_file">read_file</option>
+      </select>
+    </div>
+    <div id="tryParams" class="form-group" style="flex:2">
+      <label>Parameters</label>
+      <div id="tryParamFields"></div>
+    </div>
+  </div>
+  <div class="checkbox-row">
+    <input type="checkbox" id="tryDryRun">
+    <label for="tryDryRun">Dry run (simulate only, no enforcement)</label>
+  </div>
+  <div>
+    <button class="btn-evaluate" onclick="doEvaluate()">Evaluate</button>
+    <span class="error-inline" id="tryError">Please enter an API key above first.</span>
+  </div>
+  <div class="result-box" id="tryResult">
+    <div class="result-outcome" id="tryOutcomeBadge"></div>
+    <div class="result-detail" id="tryDetail"></div>
+    <div class="result-hint" id="tryHint"></div>
+  </div>
+</div>
+
+<!-- HITL -->
+<div class="card" id="hitlPanel">
   <div class="card-header">
     <h2>Pending HITL Reviews</h2>
     <div style="display:flex;gap:8px;align-items:center">
@@ -236,6 +312,14 @@ async function loadHealth() {
     let label = 'Healthy';
     if (d.database) label += ' | DB: ' + d.database;
     text.textContent = label;
+
+    // Show secrets banner if DB unreachable
+    const banner = document.getElementById('secretsBanner');
+    if (d.database === 'unreachable') {
+      banner.style.display = 'block';
+    } else {
+      banner.style.display = 'none';
+    }
   } catch {
     pill.className = 'status-pill unhealthy';
     text.textContent = 'Unhealthy';
@@ -402,6 +486,150 @@ function loadAll() {
   loadPolicies();
 }
 
+// ── Try It ─────────────────────────────────────────────────────────────
+const PRESETS = {
+  'bulk-delete': { tool: 'delete_records', params: { table: 'legacy_users', record_count: 500 }, dry: false },
+  'external-email': { tool: 'send_email', params: { recipient: 'partner@externalvendor.com', subject: 'Q3 Update', body: 'Q3 results are in.' }, dry: false },
+  'confidential-read': { tool: 'read_file', params: { path: '/data/confidential/salaries.csv' }, dry: false },
+};
+
+function fillPreset(name) {
+  const p = PRESETS[name];
+  document.getElementById('tryTool').value = p.tool;
+  document.getElementById('tryDryRun').checked = p.dry;
+  document.getElementById('tryResult').classList.remove('visible');
+  document.getElementById('tryError').style.display = 'none';
+  updateParamFields();
+  // Fill parameter fields
+  for (const [k, v] of Object.entries(p.params)) {
+    const el = document.getElementById('tryParam_' + k);
+    if (el) el.value = v;
+  }
+}
+
+function updateParamFields() {
+  const tool = document.getElementById('tryTool').value;
+  const wrap = document.getElementById('tryParamFields');
+  const params = TOOL_PARAMS[tool] || {};
+  let html = '';
+  for (const [key, cfg] of Object.entries(params)) {
+    const label = key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ');
+    if (cfg.type === 'textarea') {
+      html += '<div style="margin-bottom:6px"><label style="font-size:0.75rem;color:var(--text-dim);display:block">' + esc(label) + '</label><textarea id="tryParam_' + key + '" placeholder="' + esc(cfg.placeholder || '') + '" style="width:100%">' + esc(cfg.default || '') + '</textarea></div>';
+    } else {
+      html += '<div style="margin-bottom:6px"><label style="font-size:0.75rem;color:var(--text-dim);display:block">' + esc(label) + '</label><input type="' + cfg.type + '" id="tryParam_' + key + '" placeholder="' + esc(cfg.placeholder || '') + '" value="' + esc(cfg.default || '') + '" style="width:100%"></div>';
+    }
+  }
+  wrap.innerHTML = html;
+}
+
+const TOOL_PARAMS = {
+  delete_records: {
+    table: { type: 'text', placeholder: 'e.g. legacy_users', default: 'legacy_users' },
+    record_count: { type: 'number', placeholder: 'e.g. 500', default: 500 },
+  },
+  send_email: {
+    recipient: { type: 'email', placeholder: 'e.g. user@example.com', default: 'partner@externalvendor.com' },
+    subject: { type: 'text', placeholder: 'Subject line', default: 'Q3 Update' },
+    body: { type: 'textarea', placeholder: 'Email body', default: 'Q3 results are in.' },
+  },
+  read_file: {
+    path: { type: 'text', placeholder: 'e.g. /data/confidential/report.pdf', default: '/data/confidential/salaries.csv' },
+  },
+};
+
+async function doEvaluate() {
+  document.getElementById('tryError').style.display = 'none';
+  document.getElementById('tryResult').classList.remove('visible');
+
+  if (!API_KEY) {
+    document.getElementById('tryError').style.display = 'block';
+    return;
+  }
+
+  const tool = document.getElementById('tryTool').value;
+  const params = {};
+  const paramDefs = TOOL_PARAMS[tool] || {};
+  for (const key of Object.keys(paramDefs)) {
+    const el = document.getElementById('tryParam_' + key);
+    if (el) {
+      params[key] = paramDefs[key].type === 'number' ? Number(el.value) : el.value;
+    }
+  }
+  // Derive recipient_domain from recipient for send_email rule matching
+  if (tool === 'send_email' && params.recipient && params.recipient.includes('@')) {
+    params.recipient_domain = params.recipient.split('@')[1];
+  }
+  const dryRun = document.getElementById('tryDryRun').checked;
+
+  const body = { tool_call: { tool: tool, parameters: params }, dry_run: dryRun };
+
+  const resultBox = document.getElementById('tryResult');
+  const badge = document.getElementById('tryOutcomeBadge');
+  const detail = document.getElementById('tryDetail');
+  const hint = document.getElementById('tryHint');
+
+  badge.textContent = 'Evaluating...';
+  badge.style.color = 'var(--text-dim)';
+  resultBox.classList.add('visible');
+
+  try {
+    const r = await fetch('/evaluate', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (r.status === 429) {
+      const data = await r.json();
+      badge.textContent = 'Rate Limited';
+      badge.style.color = 'var(--yellow)';
+      detail.innerHTML = '<strong>429 Too Many Requests</strong> — ' + esc(data.detail || 'Try again shortly.');
+      hint.textContent = '';
+      return;
+    }
+    if (!r.ok) {
+      const data = await r.json();
+      badge.textContent = 'Error';
+      badge.style.color = 'var(--red)';
+      detail.innerHTML = '<strong>' + r.status + '</strong> — ' + esc(data.detail || data.error || r.statusText);
+      hint.textContent = '';
+      return;
+    }
+    const data = await r.json();
+    const outcome = data.outcome;
+    const outcomeClass = outcome === 'block' ? 'outcome-block'
+      : outcome === 'require_hitl' ? 'outcome-require_hitl'
+      : 'outcome-allow';
+    badge.innerHTML = '<span class="outcome-badge ' + outcomeClass + '" style="font-size:1rem;padding:4px 14px">' + esc(outcome) + '</span>';
+    badge.style.color = '';
+    let detailHtml = '';
+    if (data.matched_rule_id) detailHtml += '<strong>Matched rule:</strong> ' + esc(data.matched_rule_id) + '<br>';
+    detailHtml += '<strong>Reason:</strong> ' + esc(data.reason || '-') + '<br>';
+    if (data.dry_run) detailHtml += '<strong>Dry run:</strong> yes<br>';
+    detailHtml += '<strong>Message:</strong> ' + esc(data.message);
+    detail.innerHTML = detailHtml;
+
+    if (outcome === 'require_hitl' && data.hitl_request_id) {
+      hint.innerHTML = 'This created a pending review — check the <a href="#hitlPanel" style="color:var(--yellow)">Pending HITL Reviews</a> panel below.';
+      // Auto-scroll to HITL panel
+      setTimeout(() => {
+        document.getElementById('hitlPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 300);
+    } else {
+      hint.textContent = '';
+    }
+
+    // Auto-refresh audit log
+    loadAuditLog();
+    loadHitl();
+  } catch (e) {
+    badge.textContent = 'Request Failed';
+    badge.style.color = 'var(--red)';
+    detail.innerHTML = '<strong>Error:</strong> ' + esc(e.message);
+    hint.textContent = '';
+  }
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 function esc(s) {
   const div = document.createElement('div');
@@ -412,6 +640,7 @@ function esc(s) {
 // ── Init ───────────────────────────────────────────────────────────────
 loadAll();
 populateToolFilter();
+updateParamFields();
 setInterval(loadHealth, 15000);
 setInterval(loadHitl, 5000);
 </script>

@@ -9,9 +9,19 @@ pinned: false
 
 # Action Guardrail
 
+> **Live demo**: https://AntiSpiral18-action-guardrail.hf.space
+
 A policy engine for AI agents that intercepts tool calls **before** execution and
 evaluates them against declarative rules. Built with FastAPI for local development,
 designed to be deployable to production with a pluggable storage backend.
+
+## Live Public Deployment
+
+**https://AntiSpiral18-action-guardrail.hf.space**
+
+This is a real, publicly accessible API running on Hugging Face Spaces free
+tier with MongoDB Atlas M0 storage. Anyone can hit it — that's the point.
+Endpoint: `POST /evaluate` with `X-API-Key` and a `tool_call` payload.
 
 ## Quick Start
 
@@ -284,3 +294,32 @@ guardrail/
 ├── .env.example          # Environment variable template
 └── requirements.txt
 ```
+
+## Production Considerations
+
+This project is deployed on Hugging Face Spaces free tier (Docker + MongoDB
+Atlas M0) and AWS Lambda free tier (DynamoDB + API Gateway). The following
+hardening measures are implemented:
+
+| Feature | Implementation | Details |
+|---------|---------------|---------|
+| **API key authentication** | `X-API-Key` header checked in middleware | Applied to `/evaluate`, `/hitl/*`, `/audit-log`, `/policies`. `/health`, `/docs`, `/static`, and `/` are public. |
+| **Rate limiting** | In-memory sliding window, 60 req/min per key | Returns `429 Too Many Requests` with `Retry-After` header when exceeded. Sliding window per unique `X-API-Key` value. Applies only to `/evaluate`. In-memory store resets on container restart — acceptable for single-container deployment. |
+| **Correlation IDs** | `X-Request-ID` header | Generated as UUID if not provided by caller. Returned in response headers and present in all structured log output. Every `EVALUATE` log line includes `request_id=...`. |
+| **Request size limit** | 100KB content-length check | `413 Payload Too Large` returned before any processing for oversized requests. Applied in middleware before routing. |
+| **Graceful degradation** | Audit/HITL writes wrapped in try/except | If MongoDB is unreachable, `/evaluate` still returns a policy decision (evaluator doesn't need DB). `audit_written=false` is flagged in the response. WARNING-level logs capture the failure detail for manual recovery. |
+| **Dashboard** | Self-contained `dashboard.html` | No external dependencies, no build step. API key is held in a page-scoped JS variable (not `localStorage`). Auto-refreshes HITL queue every 5s, health every 15s. Shows a warning banner if DB is unreachable. |
+
+### What a larger-scale production deployment would add next
+
+| Area | Next step |
+|------|-----------|
+| **API key rotation** | Real key rotation with overlapping validity periods (e.g. two active keys, deprecate old after rotation window). Currently a single static key. |
+| **Persistent rate limiting** | Redis or MongoDB-backed rate counter so limits survive container restarts. Currently in-memory only. |
+| **Multi-region DB** | MongoDB Atlas M10+ with replica sets for HA and cross-region reads. Currently single-region M0. |
+| **Dedicated observability** | Datadog / Grafana / Prometheus for metrics (latency histograms, error rates, rate-limit hit counts). Currently only HF container logs. |
+| **Autoscaling** | Kubernetes or multiple HF Spaces replicas behind a load balancer. Currently single container. |
+| **Audit reconciliation** | Background queue (e.g. Celery + Redis) for retrying failed audit writes. Currently logs to WARNING only. |
+| **Webhook notifications** | Outbound webhooks on HITL creation/resolution. Currently requires polling `GET /hitl/{id}`. |
+| **RBAC / multi-tenant** | Isolated rule sets per tenant, scoped API keys with read/write/admin roles. Currently single-tenant. |
+
