@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.audit import query_audit_log, write_audit_log
@@ -264,3 +265,42 @@ async def health(request: Request):
         policies_loaded=len(rules),
         database=db_status,
     )
+
+
+@app.get("/policies")
+async def list_policies(request: Request):
+    rules: list[Rule] = request.app.state.rules
+    return {
+        "policies": [
+            {
+                "id": r.id,
+                "description": r.description,
+                "priority": r.priority,
+                "action": r.action,
+                "tool": r.match.tool,
+                "conditions": [
+                    {
+                        "field": c.field,
+                        "operator": c.operator,
+                        "value": c.value,
+                    }
+                    for c in r.match.conditions
+                ],
+            }
+            for r in rules
+        ]
+    }
+
+
+import os as _os
+_static_dir = _os.path.join(_os.path.dirname(__file__), "static")
+if _os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+    @app.get("/")
+    async def dashboard():
+        dash_path = _os.path.join(_static_dir, "dashboard.html")
+        with open(dash_path, encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+else:
+    logger.warning("No static directory found at %s — dashboard disabled", _static_dir)

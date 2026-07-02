@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Action Guardrail</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d28;
+  --surface2: #242838;
+  --border: #2e3351;
+  --text: #e2e4ed;
+  --text-dim: #8b8fa3;
+  --green: #22c55e;
+  --red: #ef4444;
+  --yellow: #eab308;
+  --blue: #3b82f6;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,sans-serif;
+  line-height: 1.5;
+  padding: 24px;
+}
+.container { max-width: 1200px; margin: 0 auto; }
+
+/* header */
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 24px;
+}
+.header h1 { font-size: 1.5rem; font-weight: 600; display: flex; align-items: center; gap: 12px; }
+.status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 12px;
+  font-size: 0.8rem; font-weight: 500;
+}
+.status-pill.healthy { background: rgba(34,197,94,0.15); color: var(--green); }
+.status-pill.unhealthy { background: rgba(239,68,68,0.15); color: var(--red); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status-pill.healthy .status-dot { background: var(--green); }
+.status-pill.unhealthy .status-dot { background: var(--red); }
+
+/* api key bar */
+.api-key-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 24px;
+}
+.api-key-bar input {
+  flex: 1; max-width: 400px;
+  padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); color: var(--text);
+  font-family: "SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+}
+.api-key-bar input::placeholder { color: var(--text-dim); }
+
+/* cards */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px; margin-bottom: 20px;
+}
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px; flex-wrap: wrap; gap: 8px;
+}
+.card-header h2 { font-size: 1.1rem; font-weight: 600; }
+
+/* tables */
+table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-dim); font-weight: 500; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+tr:hover td { background: rgba(255,255,255,0.02); }
+
+/* buttons */
+button {
+  cursor: pointer; padding: 6px 14px; border: none; border-radius: 6px;
+  font-size: 0.8rem; font-weight: 500; transition: opacity 0.15s;
+}
+button:hover { opacity: 0.85; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-approve { background: var(--green); color: #000; }
+.btn-reject { background: var(--red); color: #fff; }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-small { padding: 4px 10px; font-size: 0.75rem; }
+
+/* badges */
+.outcome-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 0.75rem; font-weight: 500;
+}
+.outcome-block { background: rgba(239,68,68,0.15); color: var(--red); }
+.outcome-require_hitl { background: rgba(234,179,8,0.15); color: var(--yellow); }
+.outcome-allow, .outcome-log_and_allow { background: rgba(34,197,94,0.15); color: var(--green); }
+
+/* filters */
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.filters select {
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface2); color: var(--text); font-size: 0.8rem;
+}
+
+/* json block */
+.json-block {
+  font-family: "SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  font-size: 0.75rem; color: var(--text-dim); max-width: 300px;
+  overflow-x: auto; white-space: pre; max-height: 60px; overflow-y: auto;
+}
+
+/* toast */
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  padding: 12px 20px; border-radius: 8px; font-size: 0.85rem;
+  animation: slide-in 0.25s ease; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.toast-success { background: var(--green); color: #000; }
+.toast-error { background: var(--red); color: #fff; }
+@keyframes slide-in { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+
+/* empty state */
+.empty-state { text-align: center; padding: 32px 16px; color: var(--text-dim); }
+
+/* rule grid */
+.rule-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.rule-card {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px;
+}
+.rule-card .rule-id { font-family: monospace; font-size: 0.8rem; color: var(--blue); }
+.rule-card .rule-action { margin-top: 4px; }
+.rule-card .rule-desc { margin-top: 4px; font-size: 0.85rem; color: var(--text-dim); }
+
+/* spinner */
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear; margin-right: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  body { padding: 12px; }
+  .header { flex-direction: column; align-items: flex-start; }
+  .filters { flex-direction: column; align-items: stretch; }
+  .rule-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="header">
+  <h1>Action Guardrail <span id="statusPill" class="status-pill"><span class="status-dot"></span> <span id="statusText">Loading...</span></span></h1>
+  <div style="display:flex;gap:8px;align-items:center">
+    <a href="/docs" style="color:var(--blue);font-size:0.85rem;text-decoration:none">API Docs</a>
+  </div>
+</div>
+
+<div class="api-key-bar">
+  <label style="font-size:0.85rem;color:var(--text-dim)">API Key:</label>
+  <input type="password" id="apiKeyInput" placeholder="Paste API key (if required)" autocomplete="off">
+</div>
+
+<!-- HITL -->
+<div class="card">
+  <div class="card-header">
+    <h2>Pending HITL Reviews</h2>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="hitlCount" style="font-size:0.8rem;color:var(--text-dim)"></span>
+      <label style="font-size:0.8rem;color:var(--text-dim)">Reviewer:</label>
+      <input type="text" id="reviewerName" value="reviewer" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text);font-size:0.8rem;width:120px">
+      <button class="btn-secondary btn-small" onclick="loadHitl()">Refresh</button>
+    </div>
+  </div>
+  <div id="hitlTableWrap"></div>
+</div>
+
+<!-- Audit Log -->
+<div class="card">
+  <div class="card-header">
+    <h2>Recent Audit Log</h2>
+    <div class="filters">
+      <select id="filterTool"><option value="">All tools</option></select>
+      <select id="filterOutcome">
+        <option value="">All outcomes</option>
+        <option value="block">block</option>
+        <option value="require_hitl">require_hitl</option>
+        <option value="log_and_allow">log_and_allow</option>
+        <option value="allow">allow</option>
+      </select>
+      <button class="btn-secondary btn-small" onclick="loadAuditLog()">Refresh</button>
+    </div>
+  </div>
+  <div id="auditTableWrap"></div>
+</div>
+
+<!-- Policies -->
+<div class="card">
+  <div class="card-header">
+    <h2>Policy Rules</h2>
+  </div>
+  <div id="policiesWrap"></div>
+</div>
+
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ── API key ────────────────────────────────────────────────────────────
+let API_KEY = '';
+document.getElementById('apiKeyInput').addEventListener('input', function() {
+  API_KEY = this.value.trim();
+});
+
+function getHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (API_KEY) h['X-API-Key'] = API_KEY;
+  return h;
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────
+function toast(msg, type) {
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + type;
+  el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+// ── Health ─────────────────────────────────────────────────────────────
+async function loadHealth() {
+  const pill = document.getElementById('statusPill');
+  const text = document.getElementById('statusText');
+  try {
+    const r = await fetch('/health', { headers: getHeaders() });
+    if (!r.ok) throw new Error(String(r.status));
+    const d = await r.json();
+    pill.className = 'status-pill healthy';
+    let label = 'Healthy';
+    if (d.database) label += ' | DB: ' + d.database;
+    text.textContent = label;
+  } catch {
+    pill.className = 'status-pill unhealthy';
+    text.textContent = 'Unhealthy';
+  }
+}
+
+// ── HITL ───────────────────────────────────────────────────────────────
+async function loadHitl() {
+  const wrap = document.getElementById('hitlTableWrap');
+  wrap.innerHTML = '<div class="empty-state"><span class="spinner"></span>Loading pending reviews...</div>';
+  try {
+    const r = await fetch('/hitl/pending', { headers: getHeaders() });
+    if (!r.ok) throw new Error(String(r.status));
+    const d = await r.json();
+    const list = d.pending || [];
+    document.getElementById('hitlCount').textContent = list.length + ' pending';
+    if (list.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No pending reviews</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>Tool</th><th>Parameters</th><th>Matched Rule</th><th>Requested</th><th>Action</th></tr></thead><tbody>';
+    for (const item of list) {
+      const params = JSON.stringify(item.tool_call.parameters, null, 1);
+      const ts = item.created_at ? new Date(item.created_at).toLocaleString() : '';
+      html += '<tr>';
+      html += '<td>' + esc(item.tool_call.tool) + '</td>';
+      html += '<td><div class="json-block">' + esc(params) + '</div></td>';
+      html += '<td>' + esc(item.decision.matched_rule_id || '-') + '</td>';
+      html += '<td>' + esc(ts) + '</td>';
+      html += '<td>';
+      html += '<button class="btn-approve btn-small" onclick="resolveHitl(\'' + item.id + '\',\'approved\')">Approve</button> ';
+      html += '<button class="btn-reject btn-small" onclick="resolveHitl(\'' + item.id + '\',\'rejected\')">Reject</button>';
+      html += '</td></tr>';
+    }
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty-state">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function resolveHitl(id, resolution) {
+  const reviewer = document.getElementById('reviewerName').value.trim() || 'reviewer';
+  try {
+    const r = await fetch('/hitl/' + id + '/' + resolution, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ resolved_by: reviewer }),
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      throw new Error(err.detail || String(r.status));
+    }
+    toast('Request ' + id.slice(0,8) + ' ' + resolution, 'success');
+    loadHitl();
+    loadAuditLog();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// ── Audit Log ──────────────────────────────────────────────────────────
+async function loadAuditLog() {
+  const wrap = document.getElementById('auditTableWrap');
+  const tool = document.getElementById('filterTool').value;
+  const outcome = document.getElementById('filterOutcome').value;
+  let url = '/audit-log?limit=20';
+  if (tool) url += '&tool=' + encodeURIComponent(tool);
+  if (outcome) url += '&outcome=' + encodeURIComponent(outcome);
+
+  wrap.innerHTML = '<div class="empty-state"><span class="spinner"></span>Loading...</div>';
+  try {
+    const r = await fetch(url, { headers: getHeaders() });
+    if (!r.ok) throw new Error(String(r.status));
+    const d = await r.json();
+    const list = d.records || [];
+    if (list.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No audit records found</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>Timestamp</th><th>Tool</th><th>Outcome</th><th>Matched Rule</th><th>Dry Run</th></tr></thead><tbody>';
+    for (const rec of list) {
+      const ts = rec.created_at ? new Date(rec.created_at).toLocaleString() : '';
+      const outcomeClass = rec.outcome === 'block' ? 'outcome-block'
+        : rec.outcome === 'require_hitl' ? 'outcome-require_hitl'
+        : 'outcome-allow';
+      html += '<tr>';
+      html += '<td style="white-space:nowrap">' + esc(ts) + '</td>';
+      html += '<td>' + esc(rec.tool) + '</td>';
+      html += '<td><span class="outcome-badge ' + outcomeClass + '">' + esc(rec.outcome) + '</span></td>';
+      html += '<td>' + esc(rec.reason) + '</td>';
+      html += '<td>' + (rec.dry_run ? '<span style="color:var(--yellow)">yes</span>' : 'no') + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty-state">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+// ── Policies ───────────────────────────────────────────────────────────
+async function loadPolicies() {
+  const wrap = document.getElementById('policiesWrap');
+  try {
+    const r = await fetch('/policies', { headers: getHeaders() });
+    if (!r.ok) throw new Error(String(r.status));
+    const d = await r.json();
+    const list = d.policies || [];
+    if (list.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No policies loaded</div>';
+      return;
+    }
+    let html = '<div class="rule-grid">';
+    for (const rule of list) {
+      const conds = rule.conditions.map(c => c.field + ' ' + c.operator + ' ' + c.value).join(', ');
+      const actionClass = rule.action === 'block' ? 'outcome-block'
+        : rule.action === 'require_hitl' ? 'outcome-require_hitl'
+        : 'outcome-allow';
+      html += '<div class="rule-card">';
+      html += '<div class="rule-id">' + esc(rule.id) + '</div>';
+      html += '<div class="rule-action"><span class="outcome-badge ' + actionClass + '">' + esc(rule.action) + '</span>';
+      html += ' <span style="color:var(--text-dim)">on</span> <code>' + esc(rule.tool) + '</code>';
+      html += ' <span style="color:var(--text-dim)">priority</span> ' + rule.priority;
+      html += '</div>';
+      html += '<div class="rule-desc">' + esc(rule.description) + '</div>';
+      if (conds) html += '<div style="margin-top:6px;font-size:0.75rem;color:var(--text-dim)">Conditions: ' + esc(conds) + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+    wrap.innerHTML = html;
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty-state">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+// ── Populate tool filter ───────────────────────────────────────────────
+async function populateToolFilter() {
+  try {
+    const r = await fetch('/audit-log?limit=50', { headers: getHeaders() });
+    if (!r.ok) return;
+    const d = await r.json();
+    const tools = new Set((d.records || []).map(r => r.tool));
+    // Also add tools from policies
+    const pr = await fetch('/policies', { headers: getHeaders() });
+    if (pr.ok) {
+      const pd = await pr.json();
+      for (const rule of (pd.policies || [])) tools.add(rule.tool);
+    }
+    const sel = document.getElementById('filterTool');
+    for (const t of [...tools].sort()) {
+      const opt = document.createElement('option');
+      opt.value = t; opt.textContent = t;
+      sel.appendChild(opt);
+    }
+  } catch {}
+}
+
+// ── Load all ───────────────────────────────────────────────────────────
+function loadAll() {
+  loadHealth();
+  loadHitl();
+  loadAuditLog();
+  loadPolicies();
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+function esc(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+loadAll();
+populateToolFilter();
+setInterval(loadHealth, 15000);
+setInterval(loadHitl, 5000);
+</script>
+</body>
+</html>
