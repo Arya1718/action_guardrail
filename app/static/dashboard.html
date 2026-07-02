@@ -289,17 +289,17 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 let API_KEY = '';
 let _keyEverWorked = false;
 
-function showApiKeyBanner() {
-  document.getElementById('noKeyBanner').classList.add('visible');
-}
+function getApiKey() { return (document.getElementById('apiKeyInput').value || '').trim(); }
+
+function showApiKeyBanner() { document.getElementById('noKeyBanner').classList.add('visible'); }
 function hideApiKeyBanner() {
   _keyEverWorked = true;
   document.getElementById('noKeyBanner').classList.remove('visible');
 }
-function needsKey() {
-  if (_keyEverWorked) return false;
-  if (!API_KEY) { showApiKeyBanner(); return true; }
-  return false;
+function hasApiKey() {
+  const k = getApiKey();
+  if (!k) { showApiKeyBanner(); return false; }
+  return true;
 }
 
 document.getElementById('apiKeyInput').addEventListener('input', function() {
@@ -309,8 +309,23 @@ document.getElementById('apiKeyInput').addEventListener('input', function() {
 
 function getHeaders() {
   const h = { 'Content-Type': 'application/json' };
-  if (API_KEY) h['X-API-Key'] = API_KEY;
+  const k = getApiKey();
+  if (k) h['X-API-Key'] = k;
   return h;
+}
+
+/** Centralized fetch wrapper: checks key first, short-circuits if
+ *  missing, shows banner, returns null so callers show friendly msg.
+ *  On first-ever successful key-authenticated call, triggers refreshAll. */
+async function apiFetch(url, options) {
+  if (!hasApiKey()) return null;
+  try {
+    const r = await fetch(url, options);
+    if (r.ok && !_keyEverWorked) { hideApiKeyBanner(); refreshAll(); }
+    return r;
+  } catch {
+    return null;
+  }
 }
 
 // ── Toast ──────────────────────────────────────────────────────────────
@@ -326,24 +341,19 @@ function toast(msg, type) {
 async function loadHealth() {
   const pill = document.getElementById('statusPill');
   const text = document.getElementById('statusText');
-  if (needsKey()) { pill.className = 'status-pill unhealthy'; text.textContent = 'No API key'; return; }
+  if (!hasApiKey()) { pill.className = 'status-pill unhealthy'; text.textContent = 'No API key'; return; }
+  const r = await apiFetch('/health', { headers: getHeaders() });
+  if (!r) { pill.className = 'status-pill unhealthy'; text.textContent = 'No API key'; return; }
+  if (!r.ok) { pill.className = 'status-pill unhealthy'; text.textContent = 'Unhealthy'; return; }
   try {
-    const r = await fetch('/health', { headers: getHeaders() });
-    if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
-    hideApiKeyBanner();
     pill.className = 'status-pill healthy';
     let label = 'Healthy';
     if (d.database) label += ' | DB: ' + d.database;
     text.textContent = label;
-
-    // Show secrets banner if DB unreachable
     const banner = document.getElementById('secretsBanner');
-    if (d.database === 'unreachable') {
-      banner.style.display = 'block';
-    } else {
-      banner.style.display = 'none';
-    }
+    if (d.database === 'unreachable') { banner.style.display = 'block'; }
+    else { banner.style.display = 'none'; }
   } catch {
     pill.className = 'status-pill unhealthy';
     text.textContent = 'Unhealthy';
@@ -353,19 +363,16 @@ async function loadHealth() {
 // ── HITL ───────────────────────────────────────────────────────────────
 async function loadHitl() {
   const wrap = document.getElementById('hitlTableWrap');
-  if (needsKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view pending reviews</div>'; return; }
+  if (!hasApiKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view pending reviews</div>'; return; }
   wrap.innerHTML = '<div class="empty-state"><span class="spinner"></span>Loading pending reviews...</div>';
+  const r = await apiFetch('/hitl/pending', { headers: getHeaders() });
+  if (!r) { wrap.innerHTML = '<div class="empty-state">Enter API key to view pending reviews</div>'; return; }
+  if (!r.ok) { wrap.innerHTML = '<div class="empty-state">Failed to load</div>'; return; }
   try {
-    const r = await fetch('/hitl/pending', { headers: getHeaders() });
-    if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
-    hideApiKeyBanner();
     const list = d.pending || [];
     document.getElementById('hitlCount').textContent = list.length + ' pending';
-    if (list.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No pending reviews</div>';
-      return;
-    }
+    if (list.length === 0) { wrap.innerHTML = '<div class="empty-state">No pending reviews</div>'; return; }
     let html = '<table><thead><tr><th>Tool</th><th>Parameters</th><th>Matched Rule</th><th>Requested</th><th>Action</th></tr></thead><tbody>';
     for (const item of list) {
       const params = JSON.stringify(item.tool_call.parameters, null, 1);
@@ -382,52 +389,47 @@ async function loadHitl() {
     }
     html += '</tbody></table>';
     wrap.innerHTML = html;
-  } catch (e) {
-    wrap.innerHTML = '<div class="empty-state">Failed to load: ' + esc(e.message) + '</div>';
+  } catch {
+    wrap.innerHTML = '<div class="empty-state">Error loading</div>';
   }
 }
 
 async function resolveHitl(id, resolution) {
+  if (!hasApiKey()) { showApiKeyBanner(); return; }
   const reviewer = document.getElementById('reviewerName').value.trim() || 'reviewer';
-  try {
-    const r = await fetch('/hitl/' + id + '/' + resolution, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ resolved_by: reviewer }),
-    });
-    if (!r.ok) {
-      const err = await r.json();
-      throw new Error(err.detail || String(r.status));
-    }
-    toast('Request ' + id.slice(0,8) + ' ' + resolution, 'success');
-    loadHitl();
-    loadAuditLog();
-  } catch (e) {
-    toast('Failed: ' + e.message, 'error');
+  const r = await apiFetch('/hitl/' + id + '/' + resolution, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ resolved_by: reviewer }),
+  });
+  if (!r) return;
+  if (!r.ok) {
+    try { const err = await r.json(); toast('Failed: ' + (err.detail || ''), 'error'); }
+    catch { toast('Failed: ' + r.status, 'error'); }
+    return;
   }
+  toast('Request ' + id.slice(0,8) + ' ' + resolution, 'success');
+  loadHitl();
+  loadAuditLog();
 }
 
 // ── Audit Log ──────────────────────────────────────────────────────────
 async function loadAuditLog() {
   const wrap = document.getElementById('auditTableWrap');
-  if (needsKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view audit log</div>'; return; }
+  if (!hasApiKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view audit log</div>'; return; }
   const tool = document.getElementById('filterTool').value;
   const outcome = document.getElementById('filterOutcome').value;
   let url = '/audit-log?limit=20';
   if (tool) url += '&tool=' + encodeURIComponent(tool);
   if (outcome) url += '&outcome=' + encodeURIComponent(outcome);
-
   wrap.innerHTML = '<div class="empty-state"><span class="spinner"></span>Loading...</div>';
+  const r = await apiFetch(url, { headers: getHeaders() });
+  if (!r) { wrap.innerHTML = '<div class="empty-state">Enter API key to view audit log</div>'; return; }
+  if (!r.ok) { wrap.innerHTML = '<div class="empty-state">Failed to load</div>'; return; }
   try {
-    const r = await fetch(url, { headers: getHeaders() });
-    if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
-    hideApiKeyBanner();
     const list = d.records || [];
-    if (list.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No audit records found</div>';
-      return;
-    }
+    if (list.length === 0) { wrap.innerHTML = '<div class="empty-state">No audit records found</div>'; return; }
     let html = '<table><thead><tr><th>Timestamp</th><th>Tool</th><th>Outcome</th><th>Matched Rule</th><th>Dry Run</th></tr></thead><tbody>';
     for (const rec of list) {
       const ts = rec.created_at ? new Date(rec.created_at).toLocaleString() : '';
@@ -444,25 +446,22 @@ async function loadAuditLog() {
     }
     html += '</tbody></table>';
     wrap.innerHTML = html;
-  } catch (e) {
-    wrap.innerHTML = '<div class="empty-state">Failed to load: ' + esc(e.message) + '</div>';
+  } catch {
+    wrap.innerHTML = '<div class="empty-state">Error loading</div>';
   }
 }
 
 // ── Policies ───────────────────────────────────────────────────────────
 async function loadPolicies() {
   const wrap = document.getElementById('policiesWrap');
-  if (needsKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view policies</div>'; return; }
+  if (!hasApiKey()) { wrap.innerHTML = '<div class="empty-state">Enter API key to view policies</div>'; return; }
+  const r = await apiFetch('/policies', { headers: getHeaders() });
+  if (!r) { wrap.innerHTML = '<div class="empty-state">Enter API key to view policies</div>'; return; }
+  if (!r.ok) { wrap.innerHTML = '<div class="empty-state">Failed to load</div>'; return; }
   try {
-    const r = await fetch('/policies', { headers: getHeaders() });
-    if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
-    hideApiKeyBanner();
     const list = d.policies || [];
-    if (list.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No policies loaded</div>';
-      return;
-    }
+    if (list.length === 0) { wrap.innerHTML = '<div class="empty-state">No policies loaded</div>'; return; }
     let html = '<div class="rule-grid">';
     for (const rule of list) {
       const conds = rule.conditions.map(c => c.field + ' ' + c.operator + ' ' + c.value).join(', ');
@@ -481,22 +480,21 @@ async function loadPolicies() {
     }
     html += '</div>';
     wrap.innerHTML = html;
-  } catch (e) {
-    wrap.innerHTML = '<div class="empty-state">Failed to load: ' + esc(e.message) + '</div>';
+  } catch {
+    wrap.innerHTML = '<div class="empty-state">Error loading</div>';
   }
 }
 
 // ── Populate tool filter ───────────────────────────────────────────────
 async function populateToolFilter() {
-  if (needsKey()) return;
+  if (!hasApiKey()) return;
+  const r = await apiFetch('/audit-log?limit=50', { headers: getHeaders() });
+  if (!r || !r.ok) return;
   try {
-    const r = await fetch('/audit-log?limit=50', { headers: getHeaders() });
-    if (!r.ok) return;
     const d = await r.json();
     const tools = new Set((d.records || []).map(r => r.tool));
-    // Also add tools from policies
-    const pr = await fetch('/policies', { headers: getHeaders() });
-    if (pr.ok) {
+    const pr = await apiFetch('/policies', { headers: getHeaders() });
+    if (pr && pr.ok) {
       const pd = await pr.json();
       for (const rule of (pd.policies || [])) tools.add(rule.tool);
     }
@@ -509,13 +507,19 @@ async function populateToolFilter() {
   } catch {}
 }
 
-// ── Load all ───────────────────────────────────────────────────────────
-function loadAll() {
+// ── Refresh all panels ─────────────────────────────────────────────────
+let _refreshPending = false;
+async function refreshAll() {
+  if (_refreshPending) return;
+  _refreshPending = true;
   loadHealth();
   loadHitl();
   loadAuditLog();
   loadPolicies();
+  populateToolFilter();
+  _refreshPending = false;
 }
+function loadAll() { refreshAll(); }
 
 // ── Try It ─────────────────────────────────────────────────────────────
 const PRESETS = {
@@ -531,7 +535,6 @@ function fillPreset(name) {
   document.getElementById('tryResult').classList.remove('visible');
   document.getElementById('tryError').style.display = 'none';
   updateParamFields();
-  // Fill parameter fields
   for (const [k, v] of Object.entries(p.params)) {
     const el = document.getElementById('tryParam_' + k);
     if (el) el.value = v;
@@ -572,28 +575,20 @@ const TOOL_PARAMS = {
 async function doEvaluate() {
   document.getElementById('tryError').style.display = 'none';
   document.getElementById('tryResult').classList.remove('visible');
-
-  if (!API_KEY) {
-    document.getElementById('tryError').style.display = 'block';
-    return;
-  }
+  if (!hasApiKey()) { document.getElementById('tryError').style.display = 'block'; return; }
 
   const tool = document.getElementById('tryTool').value;
   const params = {};
   const paramDefs = TOOL_PARAMS[tool] || {};
   for (const key of Object.keys(paramDefs)) {
     const el = document.getElementById('tryParam_' + key);
-    if (el) {
-      params[key] = paramDefs[key].type === 'number' ? Number(el.value) : el.value;
-    }
+    if (el) params[key] = paramDefs[key].type === 'number' ? Number(el.value) : el.value;
   }
-  // Derive recipient_domain from recipient for send_email rule matching
   if (tool === 'send_email' && params.recipient && params.recipient.includes('@')) {
     params.recipient_domain = params.recipient.split('@')[1];
   }
   const dryRun = document.getElementById('tryDryRun').checked;
-
-  const body = { tool_call: { tool: tool, parameters: params }, dry_run: dryRun };
+  const body = { tool_call: { tool, parameters: params }, dry_run: dryRun };
 
   const resultBox = document.getElementById('tryResult');
   const badge = document.getElementById('tryOutcomeBadge');
@@ -604,28 +599,21 @@ async function doEvaluate() {
   badge.style.color = 'var(--text-dim)';
   resultBox.classList.add('visible');
 
+  const r = await apiFetch('/evaluate', {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!r) return;
+  if (r.status === 429) {
+    try { const data = await r.json(); badge.textContent = 'Rate Limited'; badge.style.color = 'var(--yellow)'; detail.innerHTML = '<strong>429 Too Many Requests</strong> — ' + esc(data.detail || 'Try again shortly.'); hint.textContent = ''; } catch {}
+    return;
+  }
+  if (!r.ok) {
+    try { const data = await r.json(); badge.textContent = 'Error'; badge.style.color = 'var(--red)'; detail.innerHTML = '<strong>' + r.status + '</strong> — ' + esc(data.detail || data.error || r.statusText); hint.textContent = ''; } catch {}
+    return;
+  }
   try {
-    const r = await fetch('/evaluate', {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(body),
-    });
-    if (r.status === 429) {
-      const data = await r.json();
-      badge.textContent = 'Rate Limited';
-      badge.style.color = 'var(--yellow)';
-      detail.innerHTML = '<strong>429 Too Many Requests</strong> — ' + esc(data.detail || 'Try again shortly.');
-      hint.textContent = '';
-      return;
-    }
-    if (!r.ok) {
-      const data = await r.json();
-      badge.textContent = 'Error';
-      badge.style.color = 'var(--red)';
-      detail.innerHTML = '<strong>' + r.status + '</strong> — ' + esc(data.detail || data.error || r.statusText);
-      hint.textContent = '';
-      return;
-    }
     const data = await r.json();
     const outcome = data.outcome;
     const outcomeClass = outcome === 'block' ? 'outcome-block'
@@ -639,24 +627,16 @@ async function doEvaluate() {
     if (data.dry_run) detailHtml += '<strong>Dry run:</strong> yes<br>';
     detailHtml += '<strong>Message:</strong> ' + esc(data.message);
     detail.innerHTML = detailHtml;
-
     if (outcome === 'require_hitl' && data.hitl_request_id) {
       hint.innerHTML = 'This created a pending review — check the <a href="#hitlPanel" style="color:var(--yellow)">Pending HITL Reviews</a> panel below.';
-      // Auto-scroll to HITL panel
-      setTimeout(() => {
-        document.getElementById('hitlPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 300);
-    } else {
-      hint.textContent = '';
-    }
-
-    // Auto-refresh audit log
+      setTimeout(() => { document.getElementById('hitlPanel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);
+    } else { hint.textContent = ''; }
     loadAuditLog();
     loadHitl();
-  } catch (e) {
+  } catch {
     badge.textContent = 'Request Failed';
     badge.style.color = 'var(--red)';
-    detail.innerHTML = '<strong>Error:</strong> ' + esc(e.message);
+    detail.innerHTML = '<strong>Error: unexpected response</strong>';
     hint.textContent = '';
   }
 }
@@ -669,9 +649,8 @@ function esc(s) {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────
-loadAll();
-populateToolFilter();
 updateParamFields();
+refreshAll();
 setInterval(loadHealth, 15000);
 setInterval(loadHitl, 5000);
 </script>
