@@ -1,3 +1,12 @@
+---
+title: Action Guardrail
+emoji: 🛡️
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # Action Guardrail
 
 A policy engine for AI agents that intercepts tool calls **before** execution and
@@ -136,15 +145,8 @@ rule matches, the default decision is `allow`.
 
 ### Storage Abstraction
 
-`StorageBackend` is an abstract base class with three implementations:
-
-| Backend | Class | Env value | Use case |
-|---------|-------|-----------|----------|
-| In-memory | `InMemoryStorage` | `memory` | Local dev / tests |
-| DynamoDB | `DynamoDBStorage` | `dynamodb` | AWS Lambda |
-| MongoDB | `MongoStorage` | `mongo` | Hugging Face Spaces |
-
-Swap by changing the `STORAGE_BACKEND` env var (default: `mongo`).
+`StorageBackend` is an abstract base class with in-memory (`InMemoryStorage`) and
+future DynamoDB implementations. Swap by changing `STORAGE_BACKEND` env var.
 
 ## Deployment (AWS — always-free tier)
 
@@ -227,126 +229,7 @@ python harness\run_all.py      # requires GROQ_API_KEY in .env
 The harness runs all 4 LLM-driven scenarios through the deployed guardrail
 just as it does locally.
 
-### Run the harness against the HF Space endpoint
-
-```powershell
-$env:GUARDRAIL_API_URL = "https://username-action-guardrail.hf.space"
-python harness\run_all.py      # requires GROQ_API_KEY in .env
-```
-
----
-
-## Deployment (Hugging Face Spaces — always-free tier)
-
-Deploy the guardrail API to [Hugging Face Spaces](https://huggingface.co/spaces)
-using Docker + MongoDB Atlas M0 free cluster. No credit card required for
-either service.
-
-### Architecture
-
-```
-                                   ┌──────────────────┐
-                                   │  Docker Space     │
-Agent / Harness  ──HTTPS──>       │  (port 7860)      │
-                                   │  │                │
-                                   │  ├─ FastAPI app   │
-                                   │  ├─ MongoStorage  │
-                                   │  └─ policy files  │
-                                   └────────┬─────────┘
-                                            │
-                                    ┌───────┴────────┐
-                                    │  MongoDB Atlas  │
-                                    │  M0 (free tier) │
-                                    │  Audit Log +    │
-                                    │  HITL Queue     │
-                                    └────────────────┘
-```
-
-### Prerequisites
-
-1. **MongoDB Atlas M0 Cluster** (no credit card required)
-   - Go to https://www.mongodb.com/cloud/atlas/register — sign up with an email.
-   - Create an **M0 free cluster** (choose any cloud provider, e.g. AWS / us-east-1).
-   - Under **Security → Database Access**, create a database user + password.
-   - Under **Security → Network Access**, add `0.0.0.0/0` (allow all).
-   - Click **Connect** → **Drivers** → copy the **connection string** (e.g.
-     `mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority`).
-   - Keep this string private.
-
-2. **Hugging Face account**
-   - Create a free account at https://huggingface.co/join.
-   - Create a new Space: https://huggingface.co/new-space
-   - Choose **Space name** (e.g. `action-guardrail`), **Docker** as SDK.
-   - Select **Docker → Python 3.12** base image (or leave default).
-
-3. **Git** (to push the repo to the Space)
-
-### Deploy
-
-```bash
-# 1. Clone the Space repository
-git clone https://huggingface.co/spaces/<your-org>/<space-name>
-cd <space-name>
-
-# 2. Copy the guardrail source into the Space repo
-#    (or set the Space's Git remote as a second remote on this repo)
-#
-#    Option A: copy files
-cp -r ../path/to/guardrail/Dockerfile .
-cp -r ../path/to/guardrail/.dockerignore .
-cp -r ../path/to/guardrail/app/ ./app/
-cp -r ../path/to/guardrail/policies/ ./policies/
-cp ../path/to/guardrail/requirements.txt .
-cp ../path/to/guardrail/.env.example .env
-
-# 3. Set secrets in Hugging Face Space Settings → Repository secrets
-#    Required:
-#       MONGO_URI  = mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
-#       API_KEY    = a random string (e.g. openssl rand -hex 32)
-#
-#    Recommended (if running harness):
-#       GROQ_API_KEY = gsk_...  from https://console.groq.com
-
-# 4. Commit and push
-git add -A
-git commit -m "Deploy Action Guardrail"
-git push
-```
-
-HF Spaces will automatically build the Docker image and start the service.
-The first build takes 2-5 minutes. After deployment, your Space URL will be:
-`https://<your-org>-<space-name>.hf.space`
-
-### Smoke test
-
-```powershell
-.\deploy\smoke_test_hf.ps1 -Endpoint "https://<your-org>-<space-name>.hf.space" -ApiKey "your-api-key"
-```
-
-Expected output:
-```
-=== Smoke Test (HF Spaces): https://<your-org>-<space-name>.hf.space ===
-  [PASS] GET /health
-  [PASS] POST /evaluate -> block (delete >100 records)
-  [PASS] POST /evaluate -> require_hitl (external email)
-  [PASS] POST /evaluate -> log_and_allow (confidential file)
-  [PASS] POST /evaluate -> allow (unknown tool)
-
-+-------------------+
-| ALL 5 PASSED  ✓ |
-+-------------------+
-```
-
-### Run the harness against the HF Space endpoint
-
-```powershell
-$env:GUARDRAIL_API_URL = "https://<your-org>-<space-name>.hf.space"
-python harness\run_all.py      # requires GROQ_API_KEY in .env
-```
-
 ### Free-tier cost breakdown
-
-#### AWS (Lambda + DynamoDB deployment)
 
 | Service | Free tier limit | Monthly usage at 10k evaluations | Charges |
 |---------|----------------|----------------------------------|---------|
@@ -357,21 +240,11 @@ python harness\run_all.py      # requires GROQ_API_KEY in .env
 | **CloudWatch Logs** | 5 GB ingestion (first month) | ~1 MB | **$0** |
 | **Total** | | | **$0/month** |
 
-#### MongoDB Atlas / HF Spaces
-
-| Service | Free tier limit | Monthly usage at 10k evaluations | Charges |
-|---------|----------------|----------------------------------|---------|
-| **MongoDB Atlas M0** | 512 MB storage, shared vCPU | ~1 MB | **$0** |
-| **Hugging Face Spaces** | Up to 3 spaces (free CPU tier) | 1 space with Docker, ~1 GB RAM | **$0** |
-| **Total** | | | **$0/month** |
-
 If traffic exceeds free-tier limits:
 - **Lambda**: ~$0.20 per million requests + ~$0.0000166667 per GB-second beyond quota
 - **API Gateway**: ~$1.00 per million requests after 12-month free tier
 - **DynamoDB**: PAY_PER_REQUEST = ~$1.25 per million writes, ~$0.25 per million reads
 - **CloudWatch Logs**: ~$0.50 per GB ingested
-- **MongoDB Atlas**: M2 (~$9/month) or M5 (~$25/month) for higher tiers
-- **HF Spaces**: Pro ($9/month) for persistent CPU, no cold starts
 
 ### Project Layout
 
@@ -397,8 +270,7 @@ guardrail/
 ├── policies/
 │   └── example_rules.yaml
 ├── deploy/
-│   ├── smoke_test.ps1       # Post-deploy smoke test (AWS)
-│   └── smoke_test_hf.ps1    # Post-deploy smoke test (HF Spaces)
+│   ├── smoke_test.ps1    # Post-deploy smoke test
 ├── tests/
 │   ├── conftest.py
 │   ├── test_evaluator.py
@@ -407,10 +279,8 @@ guardrail/
 │   ├── test_hitl.py
 │   ├── test_main.py
 │   └── test_harness.py
-├── Dockerfile             # Container image for HF Spaces
-├── .dockerignore
-├── template.yaml          # SAM deployment template
-├── deploy.ps1             # Deployment script (AWS)
-├── .env.example           # Environment variable template
+├── template.yaml         # SAM deployment template
+├── deploy.ps1            # Deployment script
+├── .env.example          # Environment variable template
 └── requirements.txt
 ```
