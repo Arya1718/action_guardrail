@@ -23,12 +23,59 @@ This is a real, publicly accessible API running on Hugging Face Spaces free
 tier with MongoDB Atlas M0 storage. Anyone can hit it — that's the point.
 Endpoint: `POST /evaluate` with `X-API-Key` and a `tool_call` payload.
 
-## Quick Start
+## Quick Start — Demo Against the Live Deployment
+
+### Prerequisites
 
 ```bash
 pip install -r requirements.txt
-pytest -v        # 46 tests — all must pass
-uvicorn app.main:app --reload   # start the API server
+pytest -v        # all tests must pass
+```
+
+### One-time setup
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and fill in:
+
+| Variable | What to put |
+|----------|-------------|
+| `GUARDRAIL_API_KEY` | Must match the `API_KEY` secret set in the [HF Space settings](https://huggingface.co/spaces/AntiSpiral18/action-guardrail/settings). Currently `AryaGuardrail1804`. |
+| `GROQ_API_KEY` | Your free key from [console.groq.com](https://console.groq.com) — only needed for `harness/run_all.py`. |
+
+That's it. No `$env:` exports, no PowerShell shenanigans.
+
+### Two-terminal demo
+
+**Terminal 1** — Start the interactive HITL reviewer (polls the live Space):
+
+```bash
+python scripts\review_pending.py --watch
+```
+
+**Terminal 2** — Run all 4 scenarios (requires `GROQ_API_KEY` in `.env`):
+
+```bash
+python harness\run_all.py --no-auto-approve
+```
+
+When a scenario hits a `require_hitl` rule, the agent will block and print a
+dashboard URL. Switch to Terminal 1, type `a` + your name, and the agent
+unblocks within ~2 seconds.
+
+### Dashboard
+
+Open **https://AntiSpiral18-action-guardrail.hf.space** (or `/dashboard`) in a
+browser. Enter the API key, click **Connect**, and browse the audit log.
+You can also ask natural-language questions about the log data via the
+*Ask Groq* section at the bottom of the page.
+
+### Local development server
+
+```bash
+python -m uvicorn app.main:app --reload
 ```
 
 ## Rule Schema
@@ -303,12 +350,11 @@ hardening measures are implemented:
 
 | Feature | Implementation | Details |
 |---------|---------------|---------|
-| **API key authentication** | `X-API-Key` header checked in middleware | Applied to `/evaluate`, `/hitl/*`, `/audit-log`, `/policies`. `/health`, `/docs`, `/static`, and `/` are public. |
+| **API key authentication** | `X-API-Key` header checked in middleware | Applied to `/evaluate`, `/hitl/*`, `/audit-log`, `/policies`. `/health`, `/docs`, and `/` are public. |
 | **Rate limiting** | In-memory sliding window, 60 req/min per key | Returns `429 Too Many Requests` with `Retry-After` header when exceeded. Sliding window per unique `X-API-Key` value. Applies only to `/evaluate`. In-memory store resets on container restart — acceptable for single-container deployment. |
 | **Correlation IDs** | `X-Request-ID` header | Generated as UUID if not provided by caller. Returned in response headers and present in all structured log output. Every `EVALUATE` log line includes `request_id=...`. |
 | **Request size limit** | 100KB content-length check | `413 Payload Too Large` returned before any processing for oversized requests. Applied in middleware before routing. |
 | **Graceful degradation** | Audit/HITL writes wrapped in try/except | If MongoDB is unreachable, `/evaluate` still returns a policy decision (evaluator doesn't need DB). `audit_written=false` is flagged in the response. WARNING-level logs capture the failure detail for manual recovery. |
-| **Dashboard** | Self-contained `dashboard.html` | No external dependencies, no build step. API key is held in a page-scoped JS variable (not `localStorage`). Auto-refreshes HITL queue every 5s, health every 15s. Shows a warning banner if DB is unreachable. |
 
 ### What a larger-scale production deployment would add next
 

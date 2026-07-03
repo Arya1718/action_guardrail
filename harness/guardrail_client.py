@@ -4,12 +4,13 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-GUARDRAIL_API_URL = os.environ.get(
-    "GUARDRAIL_API_URL", "http://localhost:8000"
-)
-GUARDRAIL_API_KEY = os.environ.get("GUARDRAIL_API_KEY", "dev-placeholder-key")
 
-_REQUEST_TIMEOUT = int(os.environ.get("GUARDRAIL_TIMEOUT", "30"))
+def _api_url() -> str:
+    return os.environ.get("GUARDRAIL_API_URL", "http://localhost:8000")
+
+
+def _request_timeout() -> int:
+    return int(os.environ.get("GUARDRAIL_TIMEOUT", "30"))
 
 
 class GuardrailConnectionError(Exception):
@@ -24,7 +25,11 @@ class GuardrailResponseError(Exception):
 
 
 def _headers() -> dict:
-    return {"X-API-Key": GUARDRAIL_API_KEY, "Content-Type": "application/json"}
+    api_key = os.environ.get(
+        "GUARDRAIL_API_KEY",
+        os.environ.get("API_KEY", "dev-placeholder-key"),
+    )
+    return {"X-API-Key": api_key, "Content-Type": "application/json"}
 
 
 def _retry_on_connection_errors(fn: Callable[[], httpx.Response]) -> httpx.Response:
@@ -38,7 +43,7 @@ def _retry_on_connection_errors(fn: Callable[[], httpx.Response]) -> httpx.Respo
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             if attempt >= len(delays):
                 raise GuardrailConnectionError(
-                    f"Cannot reach guardrail at {GUARDRAIL_API_URL} "
+                    f"Cannot reach guardrail at {_api_url()} "
                     f"after {len(delays) + 1} attempts: {exc}"
                 ) from exc
             print(
@@ -54,10 +59,10 @@ def evaluate(tool_call: dict, dry_run: bool = False) -> dict:
 
     def _do() -> httpx.Response:
         return httpx.post(
-            f"{GUARDRAIL_API_URL}/evaluate",
+            f"{_api_url()}/evaluate",
             json=body,
             headers=_headers(),
-            timeout=_REQUEST_TIMEOUT,
+            timeout=_request_timeout(),
         )
 
     resp = _retry_on_connection_errors(_do)
@@ -69,9 +74,9 @@ def evaluate(tool_call: dict, dry_run: bool = False) -> dict:
 def get_hitl_request(request_id: str) -> dict:
     def _do() -> httpx.Response:
         return httpx.get(
-            f"{GUARDRAIL_API_URL}/hitl/{request_id}",
+            f"{_api_url()}/hitl/{request_id}",
             headers=_headers(),
-            timeout=_REQUEST_TIMEOUT,
+            timeout=_request_timeout(),
         )
 
     resp = _retry_on_connection_errors(_do)
@@ -85,10 +90,10 @@ def get_hitl_request(request_id: str) -> dict:
 def approve_hitl(request_id: str, resolved_by: str = "scenario-runner") -> dict:
     def _do() -> httpx.Response:
         return httpx.post(
-            f"{GUARDRAIL_API_URL}/hitl/{request_id}/approve",
+            f"{_api_url()}/hitl/{request_id}/approve",
             json={"resolved_by": resolved_by},
             headers=_headers(),
-            timeout=_REQUEST_TIMEOUT,
+            timeout=_request_timeout(),
         )
 
     resp = _retry_on_connection_errors(_do)
@@ -100,16 +105,30 @@ def approve_hitl(request_id: str, resolved_by: str = "scenario-runner") -> dict:
 def reject_hitl(request_id: str, resolved_by: str = "scenario-runner") -> dict:
     def _do() -> httpx.Response:
         return httpx.post(
-            f"{GUARDRAIL_API_URL}/hitl/{request_id}/reject",
+            f"{_api_url()}/hitl/{request_id}/reject",
             json={"resolved_by": resolved_by},
             headers=_headers(),
-            timeout=_REQUEST_TIMEOUT,
+            timeout=_request_timeout(),
         )
 
     resp = _retry_on_connection_errors(_do)
     if resp.status_code != 200:
         raise GuardrailResponseError(resp.status_code, resp.text)
     return resp.json()
+
+
+def list_pending_hitl() -> list[dict]:
+    def _do() -> httpx.Response:
+        return httpx.get(
+            f"{_api_url()}/hitl/pending",
+            headers=_headers(),
+            timeout=_request_timeout(),
+        )
+
+    resp = _retry_on_connection_errors(_do)
+    if resp.status_code != 200:
+        raise GuardrailResponseError(resp.status_code, resp.text)
+    return resp.json().get("pending", [])
 
 
 def list_audit_log(
@@ -125,10 +144,10 @@ def list_audit_log(
 
     def _do() -> httpx.Response:
         return httpx.get(
-            f"{GUARDRAIL_API_URL}/audit-log",
+            f"{_api_url()}/audit-log",
             params=params,
             headers=_headers(),
-            timeout=_REQUEST_TIMEOUT,
+            timeout=_request_timeout(),
         )
 
     resp = _retry_on_connection_errors(_do)

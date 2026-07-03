@@ -15,19 +15,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 def check_server() -> None:
     """Quick connectivity check before running scenarios."""
     import httpx
-    from harness.guardrail_client import GUARDRAIL_API_URL
+    from harness.guardrail_client import _api_url
 
+    url = _api_url()
     try:
-        resp = httpx.get(f"{GUARDRAIL_API_URL}/health", timeout=5)
+        resp = httpx.get(f"{url}/health", timeout=5)
         if resp.status_code != 200:
             print(f"[WARN] Guardrail health check returned {resp.status_code}")
         else:
             data = resp.json()
-            print(f"[OK] Guardrail server at {GUARDRAIL_API_URL} — "
+            print(f"[OK] Guardrail server at {url} — "
                   f"{data.get('policies_loaded', '?')} policies loaded")
     except Exception:
         print(
-            f"[ERROR] Cannot reach guardrail API at {GUARDRAIL_API_URL}.\n"
+            f"[ERROR] Cannot reach guardrail API at {url}.\n"
             f"  Start the server first:\n"
             f"    cd guardrail && uvicorn app.main:app --reload\n"
         )

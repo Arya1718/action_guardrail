@@ -37,6 +37,7 @@ class ToolCall(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
+    call_id: Optional[str] = None
     timestamp: Optional[datetime] = None
 
 
@@ -52,7 +53,12 @@ class AuditRecord(BaseModel):
     tool_call: ToolCall
     decision: Decision
     dry_run: bool = False
+    original_intended_decision: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    hitl_request_id: Optional[str] = None
+    hitl_resolved_by: Optional[str] = None
+    hitl_resolution: Optional[Literal["approved", "rejected"]] = None
+    hitl_resolved_at: Optional[datetime] = None
 
 
 class HitlRequest(BaseModel):
@@ -63,3 +69,4 @@ class HitlRequest(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     resolved_at: Optional[datetime] = None
     resolved_by: Optional[str] = None
+    audit_record_id: Optional[str] = None

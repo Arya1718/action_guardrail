@@ -21,9 +21,6 @@ def _find_outcome(result: dict, tool: str) -> dict | None:
 
 
 def _safe_run(prompt: str, dry_run: bool = False) -> dict:
-    """Run the agent turn and capture any exception with detail.
-    Returns a dict with 'result' on success or 'error_info' on failure.
-    """
     try:
         result = run_agent_turn(prompt, dry_run=dry_run)
         return {"ok": True, "result": result, "follow_up_failures": []}
@@ -34,6 +31,7 @@ def _safe_run(prompt: str, dry_run: bool = False) -> dict:
             "result": None,
             "error_info": {"exception": str(exc), "traceback": tb},
             "follow_up_failures": [],
+            "partial_outcomes": getattr(exc, "_partial_outcomes", []),
         }
 
 
@@ -55,6 +53,11 @@ def _build_scenario_result(
 
     if not run_result["ok"]:
         err = run_result["error_info"]
+        print(f"\n  [ERROR] {err.get('exception', 'unknown')}")
+        tb = err.get("traceback", "")
+        if tb:
+            for line in tb.split("\n")[-6:]:
+                print(f"    {line}")
         return {
             "name": name,
             "expected": expected,
