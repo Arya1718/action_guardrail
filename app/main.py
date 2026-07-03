@@ -827,59 +827,6 @@ _DASHBOARD_HTML = """
     white-space: pre-wrap;
   }
 
-  /* ── hitl approval ────────────────────────────────── */
-  .hitl-section {
-    margin-top: 20px;
-    background: #161b22; border: 1px solid #30363d;
-    border-radius: 8px; padding: 16px;
-  }
-  .hitl-header {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 12px;
-  }
-  .hitl-header h3 { font-size: 13px; font-weight: 600; color: #e6edf3; }
-  .hitl-header button {
-    padding: 5px 14px; background: #5b7cfa; color: #fff;
-    border: none; border-radius: 6px; cursor: pointer;
-    font-size: 11px; font-weight: 600;
-    transition: background .15s ease;
-  }
-  .hitl-header button:hover { background: #4b6ae8; }
-  .hitl-card {
-    background: #0d1117; border: 1px solid #30363d;
-    border-radius: 8px; padding: 14px 16px; margin-bottom: 10px;
-  }
-  .hitl-card:last-child { margin-bottom: 0; }
-  .hitl-card .hitl-meta {
-    font-size: 11px; color: #8b949e; margin-bottom: 6px;
-    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Liberation Mono', monospace;
-  }
-  .hitl-card .hitl-meta strong { color: #c9d1d9; }
-  .hitl-card .hitl-actions {
-    display: flex; gap: 8px; align-items: center; margin-top: 10px;
-  }
-  .hitl-card .hitl-actions input {
-    flex: 1; max-width: 200px;
-    padding: 5px 10px; border: 1px solid #30363d; border-radius: 6px;
-    font-size: 12px; background: #161b22; color: #c9d1d9; outline: none;
-  }
-  .hitl-card .hitl-actions input:focus { border-color: #5b7cfa; }
-  .hitl-card .hitl-actions .btn-approve {
-    padding: 5px 16px; background: #238636; color: #fff;
-    border: none; border-radius: 6px; cursor: pointer;
-    font-size: 12px; font-weight: 600;
-    transition: background .15s ease;
-  }
-  .hitl-card .hitl-actions .btn-approve:hover { background: #2ea043; }
-  .hitl-card .hitl-actions .btn-reject {
-    padding: 5px 16px; background: #da3633; color: #fff;
-    border: none; border-radius: 6px; cursor: pointer;
-    font-size: 12px; font-weight: 600;
-    transition: background .15s ease;
-  }
-  .hitl-card .hitl-actions .btn-reject:hover { background: #f85149; }
-  .hitl-card .hitl-actions .btn-approve:disabled,
-  .hitl-card .hitl-actions .btn-reject:disabled { opacity: .5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -920,14 +867,6 @@ _DASHBOARD_HTML = """
     </div>
     <div id="queryAnswer" style="display:none"></div>
   </div>
-
-  <div class="hitl-section" id="hitlSection">
-    <div class="hitl-header">
-      <h3>Pending Reviews</h3>
-      <button onclick="loadPendingHitl()">Refresh</button>
-    </div>
-    <div id="hitlContainer"><div class="loading">Enter API key and click Connect.</div></div>
-  </div>
 </div>
 
 <script>
@@ -941,10 +880,8 @@ async function connect() {
     if (!KEY) { showError("Please enter an API key."); return; }
     hideError();
     document.getElementById("tableContainer").innerHTML = "<div class='loading'>Connecting...</div>";
-    document.getElementById("hitlContainer").innerHTML = "<div class='loading'>Loading...</div>";
     await loadSummary();
     await loadAuditLog();
-    await loadPendingHitl();
   } catch(e) {
     showError("connect() error: " + e.message + " (see browser console)");
     console.error("connect error:", e);
@@ -1047,82 +984,6 @@ async function exportCSV() {
     a.click();
   } catch(e) {
     showError("Export error: " + e.message);
-  }
-}
-
-async function loadPendingHitl() {
-  const container = document.getElementById("hitlContainer");
-  try {
-    const r = await fetch(BASE + "/hitl/pending", { headers: HEADERS() });
-    if (!r.ok) {
-      container.innerHTML = "<div class='error'>API error " + r.status + "</div>";
-      return;
-    }
-    const d = await r.json();
-    const items = d.pending || [];
-    if (items.length === 0) {
-      container.innerHTML = "<div class='loading'>No pending reviews.</div>";
-      return;
-    }
-    let html = "";
-    for (const req of items) {
-      const tc = req.tool_call || {};
-      const td = req.decision || {};
-      const params = tc.parameters ? JSON.stringify(tc.parameters) : "";
-      const rule = td.matched_rule_id || "";
-      const reason = td.reason || "";
-      const created = req.created_at ? req.created_at.replace("T"," ").substring(0,19) : "";
-      html += "<div class='hitl-card' id='hitl-"+req.id+"'>";
-      html += "<div class='hitl-meta'><strong>Tool:</strong> " + esc(tc.tool||"?") + " &mdash; <strong>Rule:</strong> " + esc(rule) + " &mdash; <strong>At:</strong> " + created + "</div>";
-      if (params) html += "<div class='hitl-meta'><strong>Params:</strong> " + esc(params) + "</div>";
-      html += "<div class='hitl-meta'><strong>Reason:</strong> " + esc(reason) + "</div>";
-      html += "<div class='hitl-actions'>";
-      html += "<input type='text' id='reviewer-"+req.id+"' placeholder='Your name' value='dashboard-user'>";
-      html += "<button class='btn-approve' id='btn-ap-"+req.id+"' onclick='approveHitl(\""+req.id+"\")'>Approve</button>";
-      html += "<button class='btn-reject' id='btn-rj-"+req.id+"' onclick='rejectHitl(\""+req.id+"\")'>Reject</button>";
-      html += "</div></div>";
-    }
-    container.innerHTML = html;
-  } catch(e) {
-    container.innerHTML = "<div class='error'>Failed to load: " + esc(e.message) + "</div>";
-  }
-}
-
-async function approveHitl(id) {
-  const name = document.getElementById("reviewer-"+id).value.trim() || "dashboard-user";
-  const btn = document.getElementById("btn-ap-"+id);
-  btn.disabled = true; btn.textContent = "Approving...";
-  try {
-    const r = await fetch(BASE + "/hitl/"+id+"/approve", {
-      method: "POST", headers: HEADERS(),
-      body: JSON.stringify({ resolved_by: name }),
-    });
-    if (!r.ok) { alert("Approve failed: " + r.status); btn.disabled = false; btn.textContent = "Approve"; return; }
-    const card = document.getElementById("hitl-"+id);
-    card.style.opacity = "0.4";
-    card.innerHTML = "<div class='hitl-meta' style='color:#51cf66'>Approved by " + esc(name) + "</div>";
-  } catch(e) {
-    alert("Network error: " + e.message);
-    btn.disabled = false; btn.textContent = "Approve";
-  }
-}
-
-async function rejectHitl(id) {
-  const name = document.getElementById("reviewer-"+id).value.trim() || "dashboard-user";
-  const btn = document.getElementById("btn-rj-"+id);
-  btn.disabled = true; btn.textContent = "Rejecting...";
-  try {
-    const r = await fetch(BASE + "/hitl/"+id+"/reject", {
-      method: "POST", headers: HEADERS(),
-      body: JSON.stringify({ resolved_by: name }),
-    });
-    if (!r.ok) { alert("Reject failed: " + r.status); btn.disabled = false; btn.textContent = "Reject"; return; }
-    const card = document.getElementById("hitl-"+id);
-    card.style.opacity = "0.4";
-    card.innerHTML = "<div class='hitl-meta' style='color:#ff6b7a'>Rejected by " + esc(name) + "</div>";
-  } catch(e) {
-    alert("Network error: " + e.message);
-    btn.disabled = false; btn.textContent = "Reject";
   }
 }
 
