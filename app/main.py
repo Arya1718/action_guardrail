@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import uuid
+from pathlib import Path
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -641,6 +642,15 @@ async def list_policies(request: Request):
 
 
 # ── Root ──────────────────────────────────────────────────────────────────
+
+_LANDING_PATH = Path(__file__).resolve().parent / "static" / "landing.html"
+_LANDING_HTML = _LANDING_PATH.read_text(encoding="utf-8") if _LANDING_PATH.exists() else "<h1>Landing page not found</h1>"
+
+
+@app.get("/")
+async def root():
+    return HTMLResponse(_LANDING_HTML)
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():

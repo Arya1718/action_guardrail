@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Action Guardrail</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── nav ─────────────────────────────────────────── */
+  nav {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 24px; border-bottom: 1px solid #21262d;
+  }
+  nav .logo { font-size: 17px; font-weight: 700; color: #e6edf3; }
+  nav .logo span { color: #5b7cfa; }
+  nav a { color: #8b949e; font-size: 13px; text-decoration: none; margin-left: 20px; transition: color .15s; }
+  nav a:hover { color: #e6edf3; }
+
+  /* ── hero ─────────────────────────────────────────── */
+  .hero {
+    text-align: center; padding: 80px 0 60px;
+  }
+  .hero h1 { font-size: 42px; font-weight: 800; color: #e6edf3; line-height: 1.15; max-width: 700px; margin: 0 auto 16px; }
+  .hero h1 span { color: #5b7cfa; }
+  .hero p {
+    font-size: 17px; color: #8b949e; line-height: 1.6;
+    max-width: 620px; margin: 0 auto 32px;
+  }
+  .hero .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .hero .btn-primary {
+    padding: 12px 32px; background: #5b7cfa; color: #fff;
+    border: none; border-radius: 8px; cursor: pointer;
+    font-size: 15px; font-weight: 600; text-decoration: none;
+    transition: background .15s;
+  }
+  .hero .btn-primary:hover { background: #4b6ae8; }
+  .hero .btn-secondary {
+    padding: 12px 32px; background: transparent; color: #c9d1d9;
+    border: 1px solid #30363d; border-radius: 8px; cursor: pointer;
+    font-size: 15px; font-weight: 600; text-decoration: none;
+    transition: background .15s, border-color .15s;
+  }
+  .hero .btn-secondary:hover { background: #161b22; border-color: #484f58; }
+
+  /* ── section ──────────────────────────────────────── */
+  section { padding: 60px 0; }
+  section h2 { font-size: 24px; font-weight: 700; color: #e6edf3; margin-bottom: 16px; }
+  section p { font-size: 15px; color: #8b949e; line-height: 1.7; max-width: 650px; }
+  .section-divider { border: none; border-top: 1px solid #21262d; }
+
+  /* ── problem ──────────────────────────────────────── */
+  #problem p { margin-bottom: 12px; }
+  #problem p:last-child { margin-bottom: 0; }
+
+  /* ── how it works (flow) ──────────────────────────── */
+  .flow { display: flex; gap: 8px; align-items: center; margin-top: 28px; flex-wrap: wrap; }
+  .flow-step {
+    flex: 1; min-width: 120px;
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 20px 16px; text-align: center;
+  }
+  .flow-step .num {
+    display: inline-block; width: 28px; height: 28px; line-height: 28px;
+    background: #5b7cfa; color: #fff; border-radius: 50%;
+    font-size: 13px; font-weight: 700; margin-bottom: 10px;
+  }
+  .flow-step h4 { font-size: 13px; font-weight: 600; color: #e6edf3; margin-bottom: 4px; }
+  .flow-step p { font-size: 12px; color: #8b949e; line-height: 1.5; }
+  .flow-arrow { color: #30363d; font-size: 20px; flex-shrink: 0; }
+
+  /* ── scenarios ────────────────────────────────────── */
+  .scenario-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-top: 24px; }
+  .scenario-card {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 20px;
+  }
+  .scenario-card h4 { font-size: 13px; font-weight: 600; color: #e6edf3; margin-bottom: 8px; }
+  .scenario-card code {
+    display: block; font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    font-size: 12px; color: #c9d1d9; background: #0d1117;
+    padding: 8px 10px; border-radius: 6px; margin-bottom: 10px; border: 1px solid #21262d;
+  }
+  .badge {
+    display: inline-block; padding: 3px 11px; border-radius: 20px;
+    font-size: 12px; font-weight: 600; letter-spacing: .2px;
+  }
+  .badge.block { background: rgba(220,53,69,0.15); color: #ff6b7a; border: 1px solid rgba(220,53,69,0.2); }
+  .badge.require_hitl { background: rgba(255,193,7,0.12); color: #ffd43b; border: 1px solid rgba(255,193,7,0.18); }
+  .badge.log_and_allow { background: rgba(23,162,184,0.12); color: #66d9e8; border: 1px solid rgba(23,162,184,0.18); }
+
+  /* ── built with ───────────────────────────────────── */
+  .built-with { display: flex; gap: 28px; flex-wrap: wrap; margin-top: 16px; }
+  .built-with span {
+    font-size: 14px; font-weight: 600; color: #8b949e;
+    padding: 6px 14px; background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+  }
+
+  /* ── footer ───────────────────────────────────────── */
+  footer {
+    border-top: 1px solid #21262d; padding: 32px 24px;
+    text-align: center; font-size: 13px; color: #484f58;
+  }
+  footer a { color: #8b949e; text-decoration: none; }
+  footer a:hover { color: #e6edf3; }
+  footer .sep { margin: 0 10px; color: #30363d; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">Action <span>Guardrail</span></div>
+  <div>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/docs">API Docs</a>
+    <a href="https://github.com/Arya1718/action_guardrail">GitHub</a>
+  </div>
+</nav>
+
+<div class="container">
+
+<section class="hero">
+  <h1>Govern what AI agents <span>do</span>, not just what they say</h1>
+  <p>A policy layer that intercepts tool calls before they execute — block bulk deletes, hold external emails for human review, log confidential reads. Declarative YAML rules, real-time enforcement, built for deployment.</p>
+  <div class="cta-row">
+    <a href="/dashboard" class="btn-primary">Try the Live Demo &rarr;</a>
+    <a href="https://github.com/Arya1718/action_guardrail" class="btn-secondary">View on GitHub</a>
+  </div>
+</section>
+
+<hr class="section-divider">
+
+<section id="problem">
+  <h2>The Problem</h2>
+  <p>Text-based guardrails can catch what an AI <em>says</em>, but they miss what it <em>does</em>. An agent that never outputs harmful content can still call <code style="background:#161b22;padding:1px 5px;border-radius:3px;">delete_records(record_count=500)</code> or <code style="background:#161b22;padding:1px 5px;border-radius:3px;">send_email(to="competitor@example.com")</code> &mdash; and by the time you see the chat log, the damage is done.</p>
+  <p>Action Guardrail sits <strong>between</strong> the agent and its tools. Every tool call is evaluated against a set of declarative rules <em>before</em> execution. No false promises about "responsible AI" &mdash; just a programmable policy layer that enforces what your infrastructure already knows.</p>
+</section>
+
+<hr class="section-divider">
+
+<section id="how-it-works">
+  <h2>How It Works</h2>
+  <p>Four steps, zero friction.</p>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="num">1</div>
+      <h4>Agent Proposes</h4>
+      <p>The AI agent calls a tool &mdash; e.g. <code style="font-size:11px">delete_records</code> &mdash; with parameters.</p>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">2</div>
+      <h4>Policy Evaluates</h4>
+      <p>Guardrail matches the call against your YAML rules by tool name and conditions.</p>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">3</div>
+      <h4>Decision Made</h4>
+      <p>First matching rule wins: <span class="badge block" style="font-size:11px">block</span>, <span class="badge require_hitl" style="font-size:11px">require_hitl</span>, or <span class="badge log_and_allow" style="font-size:11px">log_and_allow</span>.</p>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="num">4</div>
+      <h4>Audit Logged</h4>
+      <p>Every decision is recorded with a correlation ID for forensics and compliance.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider">
+
+<section id="see-it-in-action">
+  <h2>See It In Action</h2>
+  <p>These three real scenarios ship as the default rule set. Open the dashboard with the key <code style="background:#161b22;padding:1px 5px;border-radius:3px;">AryaGuardrail1804</code> to see live results.</p>
+  <div class="scenario-cards">
+    <div class="scenario-card">
+      <h4>Bulk Delete Blocked</h4>
+      <code>delete_records({ "count": 500 })</code>
+      <span class="badge block">block</span>
+    </div>
+    <div class="scenario-card">
+      <h4>External Email Held</h4>
+      <code>send_email({ "to": "external@example.com" })</code>
+      <span class="badge require_hitl">require_hitl</span>
+    </div>
+    <div class="scenario-card">
+      <h4>Confidential Read Logged</h4>
+      <code>read_file({ "path": "/data/confidential/report.pdf" })</code>
+      <span class="badge log_and_allow">log_and_allow</span>
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider">
+
+<section id="built-with">
+  <h2>Built With</h2>
+  <div class="built-with">
+    <span>FastAPI</span>
+    <span>MongoDB</span>
+    <span>Groq</span>
+    <span>Hugging Face Spaces</span>
+    <span>Pydantic</span>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <a href="https://github.com/Arya1718/action_guardrail">GitHub</a>
+  <span class="sep">&middot;</span>
+  <span>MIT License</span>
+  <span class="sep">&middot;</span>
+  <a href="/docs">API Documentation</a>
+</footer>
+
+</body>
+</html>
