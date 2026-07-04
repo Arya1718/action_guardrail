@@ -26,8 +26,8 @@ COPY --from=builder /usr/local /usr/local
 COPY app/ ./app/
 COPY policies/ ./policies/
 
-# (Optional) Copy any other runtime files if your app needs them
-# COPY .env.example ./
+# Static assets (landing page)
+COPY app/static/ ./app/static/
 
 # Create non-root user (required by Hugging Face Spaces)
 RUN useradd -m -u 1000 appuser

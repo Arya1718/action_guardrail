@@ -9,6 +9,8 @@ pinned: false
 
 # Action Guardrail
 
+[![test](https://github.com/Arya1718/action_guardrail/actions/workflows/test.yml/badge.svg)](https://github.com/Arya1718/action_guardrail/actions/workflows/test.yml)
+
 > **Live demo**: https://AntiSpiral18-action-guardrail.hf.space
 
 A policy engine for AI agents that intercepts tool calls **before** execution and
