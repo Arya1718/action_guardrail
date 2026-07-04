@@ -3,7 +3,6 @@ import os
 import time
 from typing import Any, Optional
 
-from dotenv import load_dotenv
 from groq import Groq, APIConnectionError, APIStatusError, RateLimitError
 
 from harness.guardrail_client import (
@@ -14,8 +13,6 @@ from harness.guardrail_client import (
     poll_hitl,
 )
 from harness.tools import TOOL_SCHEMAS, execute_tool
-
-load_dotenv()
 
 MODEL = "llama-3.3-70b-versatile"
 _client_instance = None
@@ -91,6 +88,11 @@ def _call_groq_with_retry(
     raise RuntimeError("Exhausted retries for Groq API call")
 
 
+def _auto_approve_enabled() -> bool:
+    val = os.environ.get("GUARDRAIL_AUTO_APPROVE", "0")
+    return val.lower() not in ("0", "false", "no")
+
+
 def run_agent_turn(
     user_prompt: str,
     dry_run: bool = False,
@@ -103,13 +105,16 @@ def run_agent_turn(
     Returns a summary dict with keys: prompt, outcome, matched_rule,
     final_text, audit_written.
     """
+    mode_label = "ON" if dry_run else "OFF"
+    print(f"\n[SYSTEM] Initializing Action Guardrail Evaluator...")
+    print(f"[SYSTEM] Loaded N policies. Dry run mode: {mode_label}.")
     print()
-    print("+--------------------------------------------------------------------+")
+    print(f"+--------------------------------------------------------------------+")
     print(f"| AGENT SESSION [{MODEL}]")
     print(f"| Prompt: {user_prompt[:100]}")
     if dry_run:
-        print("| Mode:   DRY RUN")
-    print("+--------------------------------------------------------------------+")
+        print(f"| Mode:   DRY RUN")
+    print(f"+--------------------------------------------------------------------+")
 
     tools = TOOL_SCHEMAS
 
@@ -118,6 +123,7 @@ def run_agent_turn(
     last_rule: Optional[str] = None
     audit_written = False
     final_text = ""
+    max_turns = 8
 
     messages: list[dict] = [
         {"role": "user", "content": user_prompt}
@@ -126,9 +132,17 @@ def run_agent_turn(
 
     while True:
         turn += 1
+        if turn > max_turns:
+            _log("GROQ", f"Max turns {max_turns} reached, stopping.", indent=1)
+            break
         _log("GROQ", f"Sending to Groq (turn {turn})...", indent=1)
 
-        response = _call_groq_with_retry(messages, tools)
+        try:
+            response = _call_groq_with_retry(messages, tools)
+        except Exception as exc:
+            _log("ERR", f"Groq API error on turn {turn}: {exc}", indent=1)
+            break
+
         choice = response.choices[0]
         msg = choice.message
 
@@ -163,14 +177,15 @@ def run_agent_turn(
 
         for tc in tool_calls:
             tool_name = tc.function.name
-            tool_input = json.loads(tc.function.arguments)
+            try:
+                tool_input = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                _log("ERR", f"Groq returned malformed JSON for {tool_name}, skipping.", indent=1)
+                continue
             guardrail_params = _build_guardrail_params(tool_name, tool_input)
 
-            _log(
-                "PROPOSE",
-                f"Groq wants to call '{tool_name}' params={tool_input}",
-                indent=1,
-            )
+            args_str = ", ".join(f"{k}={v}" for k, v in tool_input.items())
+            print(f"  [AGENT] Attempting to call {tool_name}({args_str})")
 
             gr_call = {
                 "tool": tool_name,
@@ -189,15 +204,26 @@ def run_agent_turn(
                 raise
 
             outcome = gr_resp["outcome"]
+            dry_run_override = gr_resp.get("dry_run_override", False)
+            orig_decision = gr_resp.get("original_intended_decision")
             last_outcome = outcome
             last_rule = gr_resp.get("matched_rule_id")
             hitl_request_id = gr_resp.get("hitl_request_id")
             audit_written = True
+
+            # Record the effective outcome for scenario assertions
+            effective = orig_decision if dry_run_override else outcome
             tool_call_outcomes.append({
                 "tool": tool_name,
-                "outcome": outcome,
+                "outcome": effective,
                 "matched_rule": last_rule,
             })
+
+            print(f"  [GUARDRAIL] Evaluating...")
+            if last_rule:
+                print(f"  [GUARDRAIL] MATCHED {last_rule}. Decision: {effective.upper()}.")
+            else:
+                print(f"  [GUARDRAIL] No rule matched. Decision: {effective.upper()}.")
 
             _log(
                 "GUARD",
@@ -208,16 +234,31 @@ def run_agent_turn(
             if gr_resp.get("message"):
                 _log("GUARD", gr_resp["message"], indent=1)
 
-            # Branch on outcome
+            # Branch on effective outcome (accounting for dry_run_override)
             tool_result_content = ""
 
-            if outcome == "block":
+            if dry_run_override:
+                # Real decision was block or require_hitl but overridden to allow
+                if orig_decision == "block":
+                    tool_result_content = (
+                        f"[DRY RUN] Action '{tool_name}' would have been BLOCKED "
+                        f"by rule '{last_rule}'. Not executed."
+                    )
+                    print(f"  [RESULT] Would have been BLOCKED (dry-run override)")
+                else:
+                    tool_result_content = (
+                        f"[DRY RUN] Action '{tool_name}' would have required HITL "
+                        f"by rule '{last_rule}'. Not executed."
+                    )
+                    print(f"  [RESULT] Would have required HITL review (dry-run override)")
+
+            elif outcome == "block":
                 tool_result_content = (
                     f"Error: Action '{tool_name}' was BLOCKED by security policy. "
                     f"Rule: {last_rule}. Reason: {gr_resp.get('message', 'Policy violation')}. "
                     "The action was not executed. Please inform the user and suggest an alternative."
                 )
-                _log("EXEC", f"BLOCKED -- not executing {tool_name}", indent=1)
+                print(f"  [RESULT] Halted — blocked by policy")
 
             elif outcome == "require_hitl":
                 if dry_run:
@@ -228,22 +269,38 @@ def run_agent_turn(
                     )
                     _log("EXEC", f"DRY-RUN: would require HITL, skipping", indent=1)
                 elif hitl_request_id:
-                    _log(
-                        "EXEC",
-                        f"HITL pending (id={hitl_request_id}), auto-approving...",
-                        indent=1,
-                    )
-                    approve_hitl(hitl_request_id, resolved_by="scenario-runner")
-                    _log("EXEC", "HITL approved, executing simulated action...", indent=1)
-                    result = execute_tool(tool_name, tool_input)
-                    tool_result_content = result
-                    _log("EXEC", f"Result: {result[:120]}...", indent=1)
+                    if _auto_approve_enabled():
+                        print(f"  [RESULT] Paused for human review — auto-approving...")
+                        approve_hitl(hitl_request_id, resolved_by="scenario-runner")
+                        result = execute_tool(tool_name, tool_input)
+                        tool_result_content = result
+                    else:
+                        base = os.environ.get("GUARDRAIL_API_URL", "http://127.0.0.1:8001")
+                        print(f"  [RESULT] Paused for human review — open dashboard to approve/reject:")
+                        print(f"  [DASH] {base}/dashboard")
+                        poll_result = poll_hitl(hitl_request_id, timeout_s=120, interval_s=1)
+                        if poll_result.get("status") == "timeout":
+                            print(f"  [TIMEOUT] No human resolved this within 2 minutes")
+                            tool_result_content = (
+                                f"Action '{tool_name}' HITL request timed out after 2 minutes. "
+                                "Action was NOT executed."
+                            )
+                        elif poll_result.get("status") == "approved":
+                            print(f"  [RESULT] Approved by human — executing...")
+                            result = execute_tool(tool_name, tool_input)
+                            tool_result_content = result
+                        else:
+                            print(f"  [RESULT] Rejected by human — denied.")
+                            tool_result_content = (
+                                f"Action '{tool_name}' was rejected by human review. "
+                                "Not executed."
+                            )
                 else:
                     tool_result_content = (
                         f"Action '{tool_name}' requires human approval (HITL). "
                         f"Pending request created. Awaiting resolution."
                     )
-                    _log("EXEC", "HITL required, polling...", indent=1)
+                    print(f"  [RESULT] Paused for human review — polling...")
                     poll_result = poll_hitl(hitl_request_id)
                     if poll_result.get("status") == "timeout":
                         tool_result_content = (
@@ -258,12 +315,14 @@ def run_agent_turn(
                             f"Action '{tool_name}' was rejected by human review. "
                             "Not executed."
                         )
+                _log("EXEC", f"HITL branch handled", indent=1)
 
             else:
-                # allow / log_and_allow
+                # allow / log_and_allow (no override)
                 result = execute_tool(tool_name, tool_input)
                 tool_result_content = result
-                _log("EXEC", f"Executed: {result[:120]}...", indent=1)
+                label = "Executed" if not dry_run else "Simulated (dry-run)"
+                print(f"  [RESULT] {label}: {result[:80]}...")
 
             # Send tool response back to Groq
             messages.append({

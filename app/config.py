@@ -28,7 +28,7 @@ def _resolve_api_key() -> str:
             raise RuntimeError(
                 f"Failed to read API key from SSM: {exc}"
             ) from exc
-    return os.environ.get("API_KEY", "dev-placeholder-key")
+    return os.environ.get("API_KEY") or os.environ.get("GUARDRAIL_API_KEY") or "dev-placeholder-key"
 
 
 class Settings(BaseSettings):

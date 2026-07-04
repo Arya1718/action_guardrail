@@ -15,6 +15,7 @@ def create_hitl_request(
     storage: StorageBackend,
     tool_call: ToolCall,
     decision: Decision,
+    audit_record_id: Optional[str] = None,
 ) -> HitlRequest:
     request = HitlRequest(
         id="",
@@ -22,6 +23,7 @@ def create_hitl_request(
         decision=decision,
         status="pending",
         created_at=datetime.now(timezone.utc),
+        audit_record_id=audit_record_id,
     )
     request_id = storage.create_hitl_request(request)
     request.id = request_id

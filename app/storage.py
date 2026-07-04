@@ -20,6 +20,8 @@ class StorageBackend(ABC):
         limit: int = 100,
         tool: Optional[str] = None,
         outcome: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> list[AuditRecord]:
         ...
 
@@ -44,6 +46,16 @@ class StorageBackend(ABC):
     ) -> HitlRequest:
         ...
 
+    def update_audit_record(
+        self,
+        record_id: str,
+        **updates: Any,
+    ) -> Optional[AuditRecord]:
+        """Update specific fields of an audit record by ID.
+        Default: no-op (DynamoDBStorage does not support this).
+        """
+        return None
+
 
 class InMemoryStorage(StorageBackend):
 
@@ -56,11 +68,26 @@ class InMemoryStorage(StorageBackend):
         with self._lock:
             self._audit_records.append(record)
 
+    def update_audit_record(
+        self,
+        record_id: str,
+        **updates: Any,
+    ) -> Optional[AuditRecord]:
+        with self._lock:
+            for r in self._audit_records:
+                if r.id == record_id:
+                    for k, v in updates.items():
+                        setattr(r, k, v)
+                    return r
+        return None
+
     def list_audit_records(
         self,
         limit: int = 100,
         tool: Optional[str] = None,
         outcome: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> list[AuditRecord]:
         with self._lock:
             results = list(self._audit_records)
@@ -69,6 +96,10 @@ class InMemoryStorage(StorageBackend):
             results = [r for r in results if r.tool_call.tool == tool]
         if outcome is not None:
             results = [r for r in results if r.decision.outcome == outcome]
+        if since is not None:
+            results = [r for r in results if r.created_at >= since]
+        if until is not None:
+            results = [r for r in results if r.created_at <= until]
         return results[:limit]
 
     def create_hitl_request(self, request: HitlRequest) -> str:
@@ -182,6 +213,8 @@ class DynamoDBStorage(StorageBackend):
         limit: int = 100,
         tool: Optional[str] = None,
         outcome: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> list[AuditRecord]:
         from botocore.exceptions import ClientError
 
@@ -415,11 +448,32 @@ class MongoStorage(StorageBackend):
         except Exception as exc:
             raise RuntimeError(f"MongoDB write failed: {exc}") from exc
 
+    def update_audit_record(
+        self,
+        record_id: str,
+        **updates: Any,
+    ) -> Optional[AuditRecord]:
+        coll = self._require_db()["audit_log"]
+        try:
+            doc = coll.find_one_and_update(
+                {"_id": record_id},
+                {"$set": updates},
+                return_document=True,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"MongoDB update failed: {exc}") from exc
+        if doc is None:
+            return None
+        doc["id"] = str(doc.pop("_id"))
+        return AuditRecord.model_validate(doc)
+
     def list_audit_records(
         self,
         limit: int = 100,
         tool: Optional[str] = None,
         outcome: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> list[AuditRecord]:
         coll = self._require_db()["audit_log"]
         query: dict[str, Any] = {}
@@ -427,6 +481,13 @@ class MongoStorage(StorageBackend):
             query["tool_call.tool"] = tool
         if outcome is not None:
             query["decision.outcome"] = outcome
+        if since is not None or until is not None:
+            time_q: dict[str, Any] = {}
+            if since is not None:
+                time_q["$gte"] = since
+            if until is not None:
+                time_q["$lte"] = until
+            query["created_at"] = time_q
 
         try:
             cursor = coll.find(query).sort("created_at", -1).limit(limit)
