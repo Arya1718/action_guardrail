@@ -11,74 +11,109 @@ pinned: false
 
 [![test](https://github.com/Arya1718/action_guardrail/actions/workflows/test.yml/badge.svg)](https://github.com/Arya1718/action_guardrail/actions/workflows/test.yml)
 
-> **Live demo**: https://AntiSpiral18-action-guardrail.hf.space
+> **Live demo (HF Spaces)**: https://AntiSpiral18-action-guardrail.hf.space
+> **AWS deployment**: https://q6mucicr0e.execute-api.us-east-1.amazonaws.com
 
 A policy engine for AI agents that intercepts tool calls **before** execution and
 evaluates them against declarative rules. Built with FastAPI for local development,
-designed to be deployable to production with a pluggable storage backend.
+deployed on Hugging Face Spaces and AWS Lambda (both always-free tier).
 
-## Live Public Deployment
+## Quick Start — 3 Ways
 
-**https://AntiSpiral18-action-guardrail.hf.space**
+### 1. Against the live HF Space (no install needed)
 
-This is a real, publicly accessible API running on Hugging Face Spaces free
-tier with MongoDB Atlas M0 storage. Anyone can hit it — that's the point.
-Endpoint: `POST /evaluate` with `X-API-Key` and a `tool_call` payload.
+```bash
+curl -s -H "X-API-Key: AryaGuardrail1804" \
+  https://AntiSpiral18-action-guardrail.hf.space/health | python3 -m json.tool
 
-## Quick Start — Demo Against the Live Deployment
+curl -s -X POST https://AntiSpiral18-action-guardrail.hf.space/evaluate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: AryaGuardrail1804" \
+  -d '{"tool_call":{"tool":"delete_records","parameters":{"record_count":500}},"dry_run":false}' | python3 -m json.tool
+```
 
-### Prerequisites
+### 2. Against the AWS deployment
+
+```bash
+curl -s -H "X-API-Key: AryaGuardrail1804" \
+  https://q6mucicr0e.execute-api.us-east-1.amazonaws.com/health | python3 -m json.tool
+```
+
+### 3. Local development server
 
 ```bash
 pip install -r requirements.txt
-pytest -v        # all tests must pass
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
-### One-time setup
+### Install the package (for scripts and MCP server)
 
 ```bash
-cp .env.example .env
+pip install -e .
+pytest -v        # 75+ tests must pass
 ```
 
-Then edit `.env` and fill in:
+## Scripts
 
-| Variable | What to put |
-|----------|-------------|
-| `GUARDRAIL_API_KEY` | Must match the `API_KEY` secret set in the [HF Space settings](https://huggingface.co/spaces/AntiSpiral18/action-guardrail/settings). Currently `AryaGuardrail1804`. |
-| `GROQ_API_KEY` | Your free key from [console.groq.com](https://console.groq.com) — only needed for `harness/run_all.py`. |
+| Script | Purpose | Example |
+|--------|---------|---------|
+| `harness/run_all.py` | Run 4 policy scenarios against any guardrail endpoint | `GUARDRAIL_API_URL=... GUARDRAIL_API_KEY=... python harness/run_all.py --auto-approve` |
+| `scripts/review_pending.py` | Interactive HITL reviewer (approve/reject pending reviews) | `python scripts/review_pending.py --watch` |
+| `harness/run_scenarios.py` | Run scenarios individually | `python harness/run_scenarios.py` |
+| `mcp_server/test_server.py` | End-to-end MCP server test | `python mcp_server/test_server.py` |
+| `deploy/smoke_test_aws.ps1` | Smoke test the AWS deployment | `.\deploy\smoke_test_aws.ps1 -Endpoint "https://..." -ApiKey "..."` |
 
-That's it. No `$env:` exports, no PowerShell shenanigans.
-
-### Two-terminal demo
-
-**Terminal 1** — Start the interactive HITL reviewer (polls the live Space):
+### Two-terminal HITL demo (requires `.env`)
 
 ```bash
-python scripts\review_pending.py --watch
+# Terminal 1 — watch for pending reviews
+python scripts/review_pending.py --watch
+
+# Terminal 2 — run scenarios (pauses on require_hitl)
+python harness/run_all.py --no-auto-approve
 ```
 
-**Terminal 2** — Run all 4 scenarios (requires `GROQ_API_KEY` in `.env`):
-
-```bash
-python harness\run_all.py --no-auto-approve
-```
-
-When a scenario hits a `require_hitl` rule, the agent will block and print a
-dashboard URL. Switch to Terminal 1, type `a` + your name, and the agent
-unblocks within ~2 seconds.
-
-### Dashboard
+## Dashboard
 
 Open **https://AntiSpiral18-action-guardrail.hf.space** (or `/dashboard`) in a
-browser. Enter the API key, click **Connect**, and browse the audit log.
-You can also ask natural-language questions about the log data via the
-*Ask Groq* section at the bottom of the page.
+browser. Enter `AryaGuardrail1804` as the API key, click **Connect**, and browse
+the audit log. You can also ask natural-language questions about the log data
+via the *Ask Groq* section.
 
-### Local development server
+## Using in AWS CloudShell
+
+Clone the repo and run directly:
 
 ```bash
-python -m uvicorn app.main:app --reload
+git clone -b feature/infrastructure-upgrade https://github.com/Arya1718/action_guardrail.git
+cd action_guardrail
+pip install -e .
+export GUARDRAIL_API_URL=https://q6mucicr0e.execute-api.us-east-1.amazonaws.com
+export GUARDRAIL_API_KEY=AryaGuardrail1804
+export GROQ_API_KEY=your-groq-key  # only needed for run_all.py
+python scripts/review_pending.py
 ```
+
+To keep scripts running after closing the terminal, use `tmux`:
+
+```bash
+tmux new -s guardrail
+python scripts/review_pending.py --watch   # Ctrl+B then D to detach
+tmux attach -t guardrail                    # reattach later
+```
+
+## Environment Variables
+
+Create a `.env` file or export them directly. See `docs/environment.md` for the
+full reference.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `API_KEY` | No | `dev-placeholder-key` | Server-side master API key |
+| `GUARDRAIL_API_URL` | For scripts | `http://localhost:8001` | Guardrail endpoint the harness/reviewer talks to |
+| `GUARDRAIL_API_KEY` | For scripts | falls back to `API_KEY` | API key for the harness/reviewer |
+| `GROQ_API_KEY` | For harness | — | Groq API key (free at console.groq.com) |
+| `STORAGE_BACKEND` | No | `memory` | `memory`, `mongo`, or `dynamodb` |
 
 ## Rule Schema
 
@@ -379,27 +414,50 @@ guardrail/
 ## MCP Server (Claude Desktop Integration)
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server exposes
-guardrail tools directly to Claude Desktop. After installing the package:
+guardrail tools directly to Claude Desktop.
+
+### Install
 
 ```bash
 pip install -e .
 ```
 
-Add to your `claude_desktop_config.json`:
+### Claude Desktop config
+
+Find your Python path:
+```bash
+# Windows
+where python
+# macOS/Linux
+which python
+```
+
+Add to `claude_desktop_config.json` (Windows: `%APPDATA%\Claude\`, macOS:
+`~/Library/Application Support/Claude/`):
 
 ```json
 {
   "mcpServers": {
     "action-guardrail": {
-      "command": "D:\\Project\\action_guardrail\\guardrail\\.venv\\Scripts\\python.exe",
+      "command": "C:\\Path\\To\\python.exe",
       "args": ["-m", "mcp_server.server"]
     }
   }
 }
 ```
 
-**Available tools:** `evaluate_action`, `list_pending_reviews`, `approve_review`,
-`reject_review`. See `mcp_server/README.md`.
+Restart Claude Desktop, set tool-loading mode to **"Tools already loaded"**.
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `evaluate_action` | Check a proposed tool call against policy |
+| `list_pending_reviews` | List all pending HITL review requests |
+| `approve_review` | Approve a pending review |
+| `reject_review` | Reject a pending review |
+
+See `mcp_server/README.md` for full details.
 
 ## Slack Notifications
 

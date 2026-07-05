@@ -32,21 +32,29 @@ from anywhere.
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-Add an `mcpServers` entry:
+Find your Python path, then add an `mcpServers` entry:
+
+```bash
+# Windows
+where python
+# macOS/Linux
+which python
+```
 
 ```json
 {
   "mcpServers": {
     "action-guardrail": {
-      "command": "D:\\Project\\action_guardrail\\guardrail\\.venv\\Scripts\\python.exe",
+      "command": "C:\\Full\\Path\\To\\python.exe",
       "args": ["-m", "mcp_server.server"]
     }
   }
 }
 ```
 
-Substitute the path to your venv's python.exe. If not using a venv, use
-your system python and ensure all dependencies are installed globally.
+Substitute the full path to your python.exe. If using a virtual environment,
+use the venv's python binary. If installed globally, use the system python.
+Dependencies must be installed in whichever Python you point to.
 
 ### 3. Restart Claude Desktop
 
