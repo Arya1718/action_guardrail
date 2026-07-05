@@ -136,7 +136,9 @@ def main():
     # spawned server and harness client agree on the same key.
     if not os.environ.get("API_KEY") and os.environ.get("GUARDRAIL_API_KEY"):
         os.environ["API_KEY"] = os.environ["GUARDRAIL_API_KEY"]
-    os.environ["GUARDRAIL_API_URL"] = GUARDRAIL_URL
+    external_url = os.environ.get("GUARDRAIL_API_URL")
+    if not external_url:
+        os.environ["GUARDRAIL_API_URL"] = GUARDRAIL_URL
 
     _env_diagnostics()
     print()
@@ -147,44 +149,54 @@ def main():
     args = parser.parse_args()
     os.environ["GUARDRAIL_AUTO_APPROVE"] = "1" if args.auto_approve else "0"
 
-    # Start or reuse server
-    probe = _probe_server(GUARDRAIL_URL)
-    if probe == "guardrail":
-        if not _verify_api_key(GUARDRAIL_URL):
+    if external_url:
+        print(f"[BOOT] Using external guardrail server at {external_url}")
+        server_proc = None
+        try:
+            health = httpx.get(f"{external_url}/health", timeout=5).json()
+            print(f"[BOOT] Health: {health}")
+        except Exception as e:
+            print(f"[FATAL] Cannot reach external server at {external_url}: {e}")
+            sys.exit(1)
+    else:
+        # Start or reuse server
+        probe = _probe_server(GUARDRAIL_URL)
+        if probe == "guardrail":
+            if not _verify_api_key(GUARDRAIL_URL):
+                print(
+                    f"[BOOT] Found an existing server on port {GUARDRAIL_PORT}, "
+                    "but it rejected the current API_KEY (401).\n"
+                    "  This is likely a stale server from a previous run with "
+                    "different config.\n"
+                    "  Kill it and retry:\n"
+                    f"    netstat -ano | findstr :{GUARDRAIL_PORT}\n"
+                    "    Stop-Process -Id <pid> -Force\n"
+                )
+                sys.exit(1)
+            print(f"[BOOT] Reusing existing guardrail server at {GUARDRAIL_URL}")
+            server_proc = None
+        elif probe == "unknown":
             print(
-                f"[BOOT] Found an existing server on port {GUARDRAIL_PORT}, "
-                "but it rejected the current API_KEY (401).\n"
-                "  This is likely a stale server from a previous run with "
-                "different config.\n"
-                "  Kill it and retry:\n"
-                f"    netstat -ano | findstr :{GUARDRAIL_PORT}\n"
-                "    Stop-Process -Id <pid> -Force\n"
+                f"[FATAL] Port {GUARDRAIL_PORT} is occupied by a non-guardrail process.\n"
+                f"  Find it:  netstat -ano | findstr :{GUARDRAIL_PORT}\n"
+                f"  Kill it:  Stop-Process -Id <PID> -Force\n"
             )
             sys.exit(1)
-        print(f"[BOOT] Reusing existing guardrail server at {GUARDRAIL_URL}")
-        server_proc = None
-    elif probe == "unknown":
-        print(
-            f"[FATAL] Port {GUARDRAIL_PORT} is occupied by a non-guardrail process.\n"
-            f"  Find it:  netstat -ano | findstr :{GUARDRAIL_PORT}\n"
-            f"  Kill it:  Stop-Process -Id <PID> -Force\n"
-        )
-        sys.exit(1)
-    else:
-        print("[BOOT] Starting guardrail server...")
-        server_proc = start_server()
-        if not wait_for_server():
-            if server_proc.poll() is not None:
-                print(
-                    f"[FATAL] Guardrail server exited early with code {server_proc.returncode}"
-                )
-            else:
-                print("[FATAL] Guardrail server did not start in time")
-            sys.exit(1)
+        else:
+            print("[BOOT] Starting guardrail server...")
+            server_proc = start_server()
+            if not wait_for_server():
+                if server_proc.poll() is not None:
+                    print(
+                        f"[FATAL] Guardrail server exited early with code {server_proc.returncode}"
+                    )
+                else:
+                    print("[FATAL] Guardrail server did not start in time")
+                sys.exit(1)
 
-    print(f"[BOOT] Guardrail server running at {GUARDRAIL_URL}")
-    health = httpx.get(f"{GUARDRAIL_URL}/health").json()
-    print(f"[BOOT] Health: {health}")
+        print(f"[BOOT] Guardrail server running at {GUARDRAIL_URL}")
+        health = httpx.get(f"{GUARDRAIL_URL}/health").json()
+        print(f"[BOOT] Health: {health}")
     print()
 
     try:
