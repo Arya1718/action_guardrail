@@ -59,6 +59,7 @@ class AuditRecord(BaseModel):
     hitl_resolved_by: Optional[str] = None
     hitl_resolution: Optional[Literal["approved", "rejected"]] = None
     hitl_resolved_at: Optional[datetime] = None
+    org_id: str = ""
 
 
 class HitlRequest(BaseModel):
@@ -70,3 +71,4 @@ class HitlRequest(BaseModel):
     resolved_at: Optional[datetime] = None
     resolved_by: Optional[str] = None
     audit_record_id: Optional[str] = None
+    org_id: str = ""

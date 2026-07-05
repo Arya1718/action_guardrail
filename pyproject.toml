@@ -31,5 +31,5 @@ Documentation = "https://github.com/Arya1718/action_guardrail"
 Repository = "https://github.com/Arya1718/action_guardrail"
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["action_guardrail"]
+where = ["src", "."]
+include = ["action_guardrail", "mcp_server"]

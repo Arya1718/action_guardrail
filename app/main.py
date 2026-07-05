@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 import logging
@@ -16,8 +17,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.audit import query_audit_log, write_audit_log
-from app.config import Settings
+from app.config import Settings, resolve_org_id
 from app.evaluator import evaluate_action
+from app.notifications import notify_slack
 from app.hitl import (
     create_hitl_request,
     get_hitl_request_by_id,
@@ -124,12 +126,26 @@ async def _production_middleware(
 
     if protected:
         api_key = request.headers.get("X-API-Key", "")
-        if not api_key or api_key != settings.API_KEY:
+        if not api_key:
             return JSONResponse(
                 status_code=401,
                 content={
                     "error": "Unauthorized",
-                    "detail": "Missing or invalid X-API-Key header",
+                    "detail": "Missing X-API-Key header",
+                },
+                headers={
+                    "X-Request-ID": correlation_id,
+                    "WWW-Authenticate": 'ApiKey realm="guardrail"',
+                },
+            )
+        try:
+            request.state.org_id = resolve_org_id(api_key, settings)
+        except ValueError:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "Unauthorized",
+                    "detail": "Invalid API key",
                 },
                 headers={
                     "X-Request-ID": correlation_id,
@@ -257,6 +273,7 @@ async def evaluate(req: EvaluateRequest, request: Request):
     rules: list[Rule] = request.app.state.rules
     storage: StorageBackend = request.app.state.storage
     rid = getattr(request.state, "request_id", "")
+    org_id = getattr(request.state, "org_id", "")
 
     start = time.perf_counter()
     decision = evaluate_action(req.tool_call, rules)
@@ -278,6 +295,7 @@ async def evaluate(req: EvaluateRequest, request: Request):
         audit_record = write_audit_log(
             storage, req.tool_call, decision, dry_run=req.dry_run,
             original_intended_decision=original_intended_decision,
+            org_id=org_id or "",
         )
         audit_id = audit_record.id
     except Exception as exc:
@@ -287,6 +305,12 @@ async def evaluate(req: EvaluateRequest, request: Request):
         )
         audit_written = False
         audit_id = "failed"
+
+    # Fire async Slack notification for block/require_hitl (non-blocking)
+    if outcome in ("block", "require_hitl"):
+        asyncio.create_task(
+            notify_slack(tool_name, outcome, decision.matched_rule_id, decision.reason, dry_run=req.dry_run)
+        )
 
     if req.dry_run and outcome in ("block", "require_hitl"):
         dry_run_override = True
@@ -314,6 +338,7 @@ async def evaluate(req: EvaluateRequest, request: Request):
                 hitl_req = create_hitl_request(
                     storage, req.tool_call, decision,
                     audit_record_id=audit_id if audit_written else None,
+                    org_id=org_id or "",
                 )
                 hitl_request_id = hitl_req.id
                 if audit_written:
@@ -385,7 +410,8 @@ async def evaluate(req: EvaluateRequest, request: Request):
 @app.get("/hitl/pending")
 async def list_pending_hitl(request: Request):
     storage: StorageBackend = request.app.state.storage
-    pending = get_pending_hitl_requests(storage)
+    org_id = getattr(request.state, "org_id", None)
+    pending = get_pending_hitl_requests(storage, org_id=org_id)
     return {"pending": pending}
 
 
@@ -449,11 +475,12 @@ async def list_audit_log(
     until: Optional[str] = None,
 ):
     storage: StorageBackend = request.app.state.storage
+    org_id = getattr(request.state, "org_id", None)
     since_dt = _parse_iso_as_utc(since)
     until_dt = _parse_iso_as_utc(until)
     records = query_audit_log(
         storage, limit=limit, tool=tool, outcome=outcome,
-        since=since_dt, until=until_dt,
+        since=since_dt, until=until_dt, org_id=org_id,
     )
     return {
         "records": [
@@ -484,10 +511,11 @@ async def audit_log_summary(
     until: Optional[str] = None,
 ):
     storage: StorageBackend = request.app.state.storage
+    org_id = getattr(request.state, "org_id", None)
     since_dt = _parse_iso_as_utc(since)
     until_dt = _parse_iso_as_utc(until)
     records = query_audit_log(storage, limit=10_000, tool=tool, outcome=outcome,
-                              since=since_dt, until=until_dt)
+                              since=since_dt, until=until_dt, org_id=org_id)
     by_outcome: dict[str, int] = {}
     by_tool: dict[str, int] = {}
     dry_run_count = 0
@@ -513,10 +541,11 @@ async def audit_log_export(
     until: Optional[str] = None,
 ):
     storage: StorageBackend = request.app.state.storage
+    org_id = getattr(request.state, "org_id", None)
     since_dt = _parse_iso_as_utc(since)
     until_dt = _parse_iso_as_utc(until)
     records = query_audit_log(storage, limit=10_000, tool=tool, outcome=outcome,
-                              since=since_dt, until=until_dt)
+                              since=since_dt, until=until_dt, org_id=org_id)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
@@ -547,7 +576,8 @@ async def audit_log_export(
 @app.post("/query")
 async def query_audit_groq(req: QueryRequest, request: Request):
     storage: StorageBackend = request.app.state.storage
-    records = query_audit_log(storage, limit=200)
+    org_id = getattr(request.state, "org_id", None)
+    records = query_audit_log(storage, limit=200, org_id=org_id)
     context_lines: list[str] = []
     for r in records:
         context_lines.append(
@@ -559,7 +589,7 @@ async def query_audit_groq(req: QueryRequest, request: Request):
         )
     context = "\n".join(context_lines) if context_lines else "(no records)"
 
-    groq_key = os.environ.get("GROQ_API_KEY", "")
+    groq_key = settings.GROQ_API_KEY
     if not groq_key:
         return JSONResponse(
             status_code=503,

@@ -1,0 +1,21 @@
+# Lambda container image for Action Guardrail.
+# Uses the AWS-provided Python Lambda base image — NOT the HF Spaces Dockerfile.
+# Build: docker build -f Dockerfile.lambda -t action-guardrail-lambda .
+# Deploy: via AWS SAM (sam build + sam deploy)
+
+FROM public.ecr.aws/lambda/python:3.12
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application source
+COPY app/ ./app/
+COPY policies/ ./policies/
+
+# Static assets (landing page — served by Lambda via API Gateway)
+COPY app/static/ ./app/static/
+
+# Lambda Runtime Interface Client invokes this handler.
+# Mangum wraps the FastAPI ASGI app for API Gateway HTTP API v2 format.
+CMD ["app.lambda_handler.handler"]

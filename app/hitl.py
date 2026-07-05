@@ -16,6 +16,7 @@ def create_hitl_request(
     tool_call: ToolCall,
     decision: Decision,
     audit_record_id: Optional[str] = None,
+    org_id: str = "",
 ) -> HitlRequest:
     request = HitlRequest(
         id="",
@@ -24,6 +25,7 @@ def create_hitl_request(
         status="pending",
         created_at=datetime.now(timezone.utc),
         audit_record_id=audit_record_id,
+        org_id=org_id,
     )
     request_id = storage.create_hitl_request(request)
     request.id = request_id
@@ -32,8 +34,9 @@ def create_hitl_request(
 
 def get_pending_hitl_requests(
     storage: StorageBackend,
+    org_id: Optional[str] = None,
 ) -> list[HitlRequest]:
-    return storage.list_pending_hitl()
+    return storage.list_pending_hitl(org_id=org_id)
 
 
 def resolve_request(

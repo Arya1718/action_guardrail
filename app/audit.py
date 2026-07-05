@@ -12,6 +12,7 @@ def write_audit_log(
     decision: Decision,
     dry_run: bool = False,
     original_intended_decision: Optional[str] = None,
+    org_id: str = "",
 ) -> AuditRecord:
     record = AuditRecord(
         id=str(uuid.uuid4()),
@@ -19,6 +20,7 @@ def write_audit_log(
         decision=decision,
         dry_run=dry_run,
         original_intended_decision=original_intended_decision,
+        org_id=org_id,
     )
     storage.write_audit_record(record)
     return record
@@ -31,7 +33,8 @@ def query_audit_log(
     outcome: Optional[str] = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
+    org_id: Optional[str] = None,
 ) -> list[AuditRecord]:
     return storage.list_audit_records(
-        limit=limit, tool=tool, outcome=outcome, since=since, until=until,
+        limit=limit, tool=tool, outcome=outcome, since=since, until=until, org_id=org_id,
     )

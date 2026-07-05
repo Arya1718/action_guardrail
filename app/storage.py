@@ -22,6 +22,7 @@ class StorageBackend(ABC):
         outcome: Optional[str] = None,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
+        org_id: Optional[str] = None,
     ) -> list[AuditRecord]:
         ...
 
@@ -34,7 +35,7 @@ class StorageBackend(ABC):
         ...
 
     @abstractmethod
-    def list_pending_hitl(self) -> list[HitlRequest]:
+    def list_pending_hitl(self, org_id: Optional[str] = None) -> list[HitlRequest]:
         ...
 
     @abstractmethod
@@ -88,6 +89,7 @@ class InMemoryStorage(StorageBackend):
         outcome: Optional[str] = None,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
+        org_id: Optional[str] = None,
     ) -> list[AuditRecord]:
         with self._lock:
             results = list(self._audit_records)
@@ -100,6 +102,8 @@ class InMemoryStorage(StorageBackend):
             results = [r for r in results if r.created_at >= since]
         if until is not None:
             results = [r for r in results if r.created_at <= until]
+        if org_id is not None:
+            results = [r for r in results if r.org_id == org_id]
         return results[:limit]
 
     def create_hitl_request(self, request: HitlRequest) -> str:
@@ -113,11 +117,12 @@ class InMemoryStorage(StorageBackend):
         with self._lock:
             return self._hitl_requests.get(request_id)
 
-    def list_pending_hitl(self) -> list[HitlRequest]:
+    def list_pending_hitl(self, org_id: Optional[str] = None) -> list[HitlRequest]:
         with self._lock:
-            return [
-                r for r in self._hitl_requests.values() if r.status == "pending"
-            ]
+            results = [r for r in self._hitl_requests.values() if r.status == "pending"]
+        if org_id is not None:
+            results = [r for r in results if r.org_id == org_id]
+        return results
 
     def resolve_hitl_request(
         self,
@@ -215,6 +220,7 @@ class DynamoDBStorage(StorageBackend):
         outcome: Optional[str] = None,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
+        org_id: Optional[str] = None,
     ) -> list[AuditRecord]:
         from botocore.exceptions import ClientError
 
@@ -250,6 +256,8 @@ class DynamoDBStorage(StorageBackend):
                 cleaned["decision"]["evaluated_at"] = self._parse_dt(
                     cleaned["decision"]["evaluated_at"]
                 )
+            if org_id is not None and cleaned.get("org_id", "") != org_id:
+                continue
             try:
                 result.append(AuditRecord.model_validate(cleaned))
             except Exception:
@@ -288,7 +296,7 @@ class DynamoDBStorage(StorageBackend):
             return None
         return self._hitl_from_item(item)
 
-    def list_pending_hitl(self) -> list[HitlRequest]:
+    def list_pending_hitl(self, org_id: Optional[str] = None) -> list[HitlRequest]:
         from botocore.exceptions import ClientError
 
         try:
@@ -306,7 +314,10 @@ class DynamoDBStorage(StorageBackend):
         result: list[HitlRequest] = []
         for item in resp.get("Items", []):
             try:
-                result.append(self._hitl_from_item(item))
+                req = self._hitl_from_item(item)
+                if org_id is not None and req.org_id != org_id:
+                    continue
+                result.append(req)
             except Exception:
                 continue
         return result
@@ -474,6 +485,7 @@ class MongoStorage(StorageBackend):
         outcome: Optional[str] = None,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
+        org_id: Optional[str] = None,
     ) -> list[AuditRecord]:
         coll = self._require_db()["audit_log"]
         query: dict[str, Any] = {}
@@ -488,6 +500,8 @@ class MongoStorage(StorageBackend):
             if until is not None:
                 time_q["$lte"] = until
             query["created_at"] = time_q
+        if org_id is not None:
+            query["org_id"] = org_id
 
         try:
             cursor = coll.find(query).sort("created_at", -1).limit(limit)
@@ -528,10 +542,13 @@ class MongoStorage(StorageBackend):
         doc["id"] = str(doc.pop("_id"))
         return HitlRequest.model_validate(doc)
 
-    def list_pending_hitl(self) -> list[HitlRequest]:
+    def list_pending_hitl(self, org_id: Optional[str] = None) -> list[HitlRequest]:
         coll = self._require_db()["hitl_queue"]
+        query: dict[str, Any] = {"status": "pending"}
+        if org_id is not None:
+            query["org_id"] = org_id
         try:
-            cursor = coll.find({"status": "pending"}).sort("created_at", -1)
+            cursor = coll.find(query).sort("created_at", -1)
             result: list[HitlRequest] = []
             for doc in cursor:
                 doc["id"] = str(doc.pop("_id"))

@@ -1,8 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Action Guardrail — policy engine for AI agents. Deployed on always-free-tier
-  AWS resources: Lambda, API Gateway HTTP API, DynamoDB, SSM Parameter Store.
+  Action Guardrail — policy engine for AI agents.
+  Deployed on always-free-tier AWS resources: Lambda (container image),
+  API Gateway HTTP API, SSM Parameter Store. Uses existing MongoDB Atlas
+  cluster (separate database name "guardrail_aws").
 
 Parameters:
   ApiKeyParamValue:
@@ -11,124 +13,114 @@ Parameters:
       Value for the guardrail API key stored in SSM Parameter Store.
       This key must be sent as X-API-Key header with every request.
 
+  MongoUriParamValue:
+    Type: String
+    Description: >
+      MongoDB Atlas connection string. Same cluster as HF Spaces deployment,
+      but using a different database name (MONGO_DB_NAME).
+
+  MongoDbNameParamValue:
+    Type: String
+    Default: guardrail_aws
+    Description: >
+      MongoDB database name for this deployment. Defaults to "guardrail_aws"
+      to keep data separate from the HF Spaces deployment (which uses
+      "guardrail").
+
+  GroqApiKeyParamValue:
+    Type: String
+    Default: ""
+    Description: >
+      Optional Groq API key for the /query endpoint. Leave empty if not
+      needed.
+
 Globals:
   Function:
     Timeout: 10
     MemorySize: 512
-    Runtime: python3.12
     Architectures:
       - x86_64
-    Tracing: Active
 
 Resources:
 
-  # ── Lambda function ──────────────────────────────────────────────────────
+  # ── Lambda function (container image via ECR) ─────────────────────────
   GuardrailFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      Dockerfile: Dockerfile.lambda
+      DockerContext: .
+      DockerTag: guardrail-lambda
     Properties:
-      CodeUri: .
-      Handler: app.lambda_handler.handler
+      PackageType: Image
+      ImageConfig:
+        Command:
+          - app.lambda_handler.handler
       Environment:
         Variables:
           POLICY_FILE_PATH: policies/example_rules.yaml
-          STORAGE_BACKEND: dynamodb
+          STORAGE_BACKEND: mongo
       Policies:
-        # CloudWatch Logs (scoped to this function's log group)
-        - Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogGroup
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource:
-                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${GuardrailFunction}:*"
-                - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${GuardrailFunction}:*:*"
-        # DynamoDB audit-log table
-        - Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:PutItem
-                - dynamodb:Scan
-              Resource: !GetAtt AuditTable.Arn
-        # DynamoDB HITL queue table (query on GSI for pending listing)
-        - Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Action:
-                - dynamodb:PutItem
-                - dynamodb:GetItem
-                - dynamodb:UpdateItem
-                - dynamodb:Query
-              Resource:
-                - !GetAtt HitlTable.Arn
-                - !Sub "${HitlTable.Arn}/index/*"
-        # SSM Parameter Store (read API key on cold start)
+        # SSM Parameter Store — read-only access to specific paths
         - Version: "2012-10-17"
           Statement:
             - Effect: Allow
               Action:
                 - ssm:GetParameter
-              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/guardrail/api-key"
-      Events:
-        HttpApiEvent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref GuardrailHttpApi
-            Method: ANY
-            Path: /{proxy+}
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/guardrail/api-key"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/guardrail/mongo-uri"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/guardrail/mongo-db-name"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/guardrail/groq-api-key"
 
-  # ── API Gateway HTTP API ─────────────────────────────────────────────────
+  # ── HTTP API ──────────────────────────────────────────────────────────
   GuardrailHttpApi:
-    Type: AWS::Serverless::HttpApi
+    Type: AWS::ApiGatewayV2::Api
     Properties:
       Name: guardrail-http-api
-      Description: HTTP API for Action Guardrail
-      FailOnWarnings: true
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - X-API-Key
 
-  # ── DynamoDB: Audit Log ──────────────────────────────────────────────────
-  AuditTable:
-    Type: AWS::DynamoDB::Table
+  GuardrailHttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
     Properties:
-      TableName: guardrail-audit-log
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: id
-          KeyType: HASH
-      # Production-scale note: add a GSI on (tool, created_at) if filtered
-      # queries need to avoid full table scans at high volume.
+      ApiId: !Ref GuardrailHttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GuardrailFunction.Arn}/invocations"
+      PayloadFormatVersion: "2.0"
 
-  # ── DynamoDB: HITL Queue ─────────────────────────────────────────────────
-  HitlTable:
-    Type: AWS::DynamoDB::Table
+  GuardrailHttpApiRoute:
+    Type: AWS::ApiGatewayV2::Route
     Properties:
-      TableName: guardrail-hitl-queue
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: id
-          AttributeType: S
-        - AttributeName: status
-          AttributeType: S
-      KeySchema:
-        - AttributeName: id
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: status-index
-          KeySchema:
-            - AttributeName: status
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+      ApiId: !Ref GuardrailHttpApi
+      RouteKey: ANY /{proxy+}
+      Target: !Sub "integrations/${GuardrailHttpApiIntegration}"
 
-  # ── SSM Parameter Store (standard tier, free) ───────────────────────────
-  # NOTE: Stored as plain String, NOT SecureString. SecureString requires
-  # either the default aws/ssm KMS key (free) or a custom KMS key (~$1/month).
-  # For real secrets in production, use SecureString + KMS despite the small
-  # cost. Here we use String to stay strictly within free tier.
+  GuardrailHttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: $default
+      ApiId: !Ref GuardrailHttpApi
+      AutoDeploy: true
+
+  # ── Lambda invoke permission for API Gateway ───────────────────────────
+  GuardrailFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GuardrailFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${GuardrailHttpApi}/*/*/*"
+
+  # ── SSM Parameter Store (standard tier, free) ─────────────────────────
   GuardrailApiKeyParameter:
     Type: AWS::SSM::Parameter
     Properties:
@@ -137,12 +129,29 @@ Resources:
       Value: !Ref ApiKeyParamValue
       Description: API key for Action Guardrail /evaluate endpoint
 
-  # ── CloudWatch Log Group (explicit retention to avoid unbounded growth) ──
-  GuardrailFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
+  GuardrailMongoUriParameter:
+    Type: AWS::SSM::Parameter
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${GuardrailFunction}"
-      RetentionInDays: 7
+      Name: /guardrail/mongo-uri
+      Type: String
+      Value: !Ref MongoUriParamValue
+      Description: MongoDB Atlas connection string
+
+  GuardrailMongoDbNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /guardrail/mongo-db-name
+      Type: String
+      Value: !Ref MongoDbNameParamValue
+      Description: MongoDB database name (separate from HF Spaces deployment)
+
+  GuardrailGroqApiKeyParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /guardrail/groq-api-key
+      Type: String
+      Value: !Ref GroqApiKeyParamValue
+      Description: Optional Groq API key for /query endpoint
 
 Outputs:
   GuardrailApiEndpoint:
